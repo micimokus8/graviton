@@ -43,7 +43,7 @@ KRAKEN_SECRET = os.getenv("KRAKEN_API_SECRET", "")
 
 @dataclass
 class FillResult:
-    """Ergebnis einer gefillten Order."""
+    """Ergebnis einer gefillten Order. Identisch zu TradeResult — eine reicht."""
     success: bool
     symbol: str
     side: str
@@ -54,18 +54,8 @@ class FillResult:
     message: str
     timestamp: str
 
-
-@dataclass
-class TradeResult:
-    success: bool
-    symbol: str
-    side: str
-    order_id: str
-    price: float
-    size: float
-    cost: float
-    message: str
-    timestamp: str
+# Alias für Kompatibilität
+TradeResult = FillResult
 
 
 class KrakenTrader:
@@ -92,7 +82,8 @@ class KrakenTrader:
         try:
             ticker = self._get_exchange().fetch_ticker("EUR/USD:USD")
             return float(ticker.get("last", 1.08) or 1.08)
-        except Exception:
+        except Exception as e:
+            print(f"[Trader] EUR/USD fetch: {e} — Fallback 1.08")
             return 1.08
 
     def get_equity(self) -> float:
@@ -131,12 +122,16 @@ class KrakenTrader:
         try:
             ex = self._get_exchange()
             ex.load_markets()
+            market = ex.market(symbol)
             ticker = ex.fetch_ticker(symbol)
             price = float(ticker["last"])
-            contracts = usd_amount / price
-            market = ex.market(symbol)
+            contract_size = float(market.get("contractSize", 1) or 1)
+            contracts = usd_amount / (price * contract_size)
             min_amount = market.get("limits", {}).get("amount", {}).get("min", 1) or 1
-            return max(contracts, min_amount)
+            if contracts < min_amount:
+                print(f"[Trader] {symbol}: ${usd_amount:.2f} → {contracts:.6f} Contracts < min {min_amount}. Abbruch.")
+                return 0.0
+            return contracts
         except Exception as e:
             print(f"[Trader] Kontraktgröße: {e}")
             return 0
@@ -206,7 +201,8 @@ class KrakenTrader:
                 if o.get("reduceOnly") and "stop" in str(o.get("type", "")).lower():
                     return True
             return False
-        except Exception:
+        except Exception as e:
+            print(f"[Trader] has_stop_loss {symbol}: {e}")
             return False
 
     def get_stop_loss_price(self, symbol: str) -> Optional[float]:
@@ -223,7 +219,8 @@ class KrakenTrader:
                         or 0
                     )
             return None
-        except Exception:
+        except Exception as e:
+            print(f"[Trader] get_stop_loss_price {symbol}: {e}")
             return None
 
     def _cancel_stop_orders(self, symbol: str):
@@ -235,8 +232,8 @@ class KrakenTrader:
                 if o.get("reduceOnly") and "stop" in str(o.get("type", "")).lower():
                     ex.cancel_order(o["id"], symbol)
                     print(f"[Trader] Alten SL gecancelled")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[Trader] _cancel_stop_orders {symbol}: {e}")
 
     def _price_precision(self, symbol: str) -> int:
         """Anzahl Dezimalstellen für Preis-Tick."""
@@ -273,12 +270,13 @@ class KrakenTrader:
             ndigits = self._price_precision(symbol)
             sl_rounded = round(stop_price, ndigits)
 
-            # Get position size if not given
+            # Get position size — match side
             if amount is None or amount <= 0:
                 positions = ex.fetch_positions([symbol])
                 for p in positions:
                     c = float(p.get("contracts", 0) or 0)
-                    if c > 0:
+                    p_side = (p.get("side", "") or "").lower()
+                    if c > 0 and p_side == side:
                         amount = c
                         break
 
@@ -317,11 +315,13 @@ class KrakenTrader:
             # Cancel SL first
             self._cancel_stop_orders(symbol)
 
-            # Get position
+            # Get position — match side
             positions = ex.fetch_positions([symbol])
             pos = None
             for p in positions:
-                if float(p.get("contracts", 0) or 0) > 0:
+                c = float(p.get("contracts", 0) or 0)
+                p_side = (p.get("side", "") or "").lower()
+                if c > 0 and p_side == side:
                     pos = p
                     break
 
@@ -358,5 +358,6 @@ class KrakenTrader:
             return []
         try:
             return self._get_exchange().fetch_positions()
-        except Exception:
+        except Exception as e:
+            print(f"[Trader] fetch_positions error: {e}")
             return []
