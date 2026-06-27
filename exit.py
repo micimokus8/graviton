@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """
-graviton/exit.py — 3 Exit-Wege
-================================
-A) PATTERN EXIT → 50% raus, Rest Trailing
-B) STRUKTURELL → 100% raus (EMA overextended, S/R erreicht, RSI extrem)
-C) SESSION ENDE → 100% raus
-
-Exit-Signale werden kontinuierlich geprüft (via watcher.py).
+graviton/exit.py — 3 Exit-Stufen
+==================================
+Stufe 1 — PATTERN (50%): Gegenbewegungskerze → 50% schließen + SL auf Break-Even
+Stufe 2 — STRUKTURELL (100%): EMA overextended, S/R erreicht, RSI extrem, Stop-Loss
+Stufe 3 — SESSION ENDE (100%): Zwangsschluss bei Session-Ende
 """
 
 from __future__ import annotations
 import ccxt
 import numpy as np
-from typing import Optional, Tuple, List
+from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -23,38 +21,31 @@ from sr_levels import SRCalculator
 
 
 class ExitReason(Enum):
-    PATTERN = "pattern"              # Candlestick-Reversal
-    EMA_OVEREXTENDED = "ema_overextended"
-    SR_REACHED = "sr_reached"
-    RSI_EXTREME = "rsi_extreme"
-    SESSION_END = "session_end"
-    STOP_LOSS = "stop_loss"
+    PATTERN = "pattern"                  # 50% close + SL → breakeven
+    EMA_OVEREXTENDED = "ema_overextended"  # 100% close
+    SR_REACHED = "sr_reached"            # 100% close
+    RSI_EXTREME = "rsi_extreme"          # 100% close
+    STOP_LOSS = "stop_loss"              # 100% close
+    SESSION_END = "session_end"          # 100% close
     NONE = "none"
 
 
 @dataclass
 class ExitSignal:
-    """Exit-Signal für einen Trade."""
     symbol: str
-    side: str              # "long" / "short"
+    side: str
     reason: ExitReason
-    close_pct: float       # 0.5 = 50%, 1.0 = 100%
+    close_pct: float
     price: float
     ema20: float
     distance_pct: float
     rsi: float
     pattern_detected: bool
+    move_sl_to_breakeven: bool
     message: str
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Exit Engine
-# ═══════════════════════════════════════════════════════════════════
-
 class ExitEngine:
-    """
-    Prüft alle Exit-Bedingungen und gibt Exit-Signale zurück.
-    """
 
     def __init__(self):
         self._exchange: Optional[ccxt.Exchange] = None
@@ -83,207 +74,123 @@ class ExitEngine:
         avg_loss = np.mean(loss[-period:])
         if avg_loss == 0:
             return 100.0
-        rs = avg_gain / avg_loss
-        return 100.0 - (100.0 / (1.0 + rs))
+        return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
 
-    def check(
-        self,
-        symbol: str,
-        side: str,
-        entry_price: float,
-        stop_loss: float,
-        current_step: int,
-        trailing_active: bool = False,
-        trailing_price: float = 0.0,
-    ) -> ExitSignal:
-        """
-        Vollständiger Exit-Check.
+    def _no_signal(self, symbol: str, side: str) -> ExitSignal:
+        return ExitSignal(symbol, side, ExitReason.NONE, 0, 0, 0, 0, 0, False, False, "Kein Signal")
 
-        Returns ExitSignal — wenn reason != NONE → exit ausführen.
+    def _sig(self, symbol, side, reason, close_pct, price, ema20, dist, rsi,
+             pattern=False, move_sl=False, msg="") -> ExitSignal:
+        return ExitSignal(symbol, side, reason, close_pct, price, ema20, dist, rsi,
+                         pattern, move_sl, msg)
 
-        Priorität:
-          1. Pattern Exit (50%)
-          2. Strukturell (100%)
-          3. Session Ende (100%) — handled extern
-        """
+    def check(self, symbol: str, side: str, entry_price: float,
+              stop_loss: float, current_step: int,
+              trailing_active: bool = False, trailing_price: float = 0.0) -> ExitSignal:
         cfg_exit = CFG.exit
+        ns = self._no_signal(symbol, side)
+        sig = self._sig
 
         try:
             data = self._fetch_1m(symbol, limit=60)
         except Exception:
-            return ExitSignal(
-                symbol=symbol, side=side, reason=ExitReason.NONE,
-                close_pct=0, price=0, ema20=0, distance_pct=0, rsi=0,
-                pattern_detected=False, message="Daten-Fehler",
-            )
+            return sig(symbol, side, ExitReason.NONE, 0, 0, 0, 0, 0, msg="Daten-Fehler")
 
         closes = data[:, 4]
         highs  = data[:, 2]
         lows   = data[:, 3]
         opens  = data[:, 1]
 
-        current_price = float(closes[-1])
-        ema20 = float(np.mean(closes[-20:])) if len(closes) >= 20 else current_price
-        distance_pct = abs(current_price - ema20) / ema20 * 100
-        rsi_value = self._rsi(closes)
+        price = float(closes[-1])
+        ema20 = float(np.mean(closes[-20:])) if len(closes) >= 20 else price
+        dist = abs(price - ema20) / ema20 * 100
+        rsi_val = self._rsi(closes)
 
-        # ─── A) Pattern Exit (50%) ─────────────────────────────
+        # ─── Stufe 1: Pattern (50%) ────────────────────────────
 
         pattern = detect_exit_pattern(opens, highs, lows, closes, side.upper())
         if pattern and cfg_exit["pattern_exit_50"]:
-            pattern_name = self._which_pattern(opens, highs, lows, closes, side.upper())
-            return ExitSignal(
-                symbol=symbol, side=side,
-                reason=ExitReason.PATTERN,
-                close_pct=0.5,
-                price=current_price, ema20=ema20,
-                distance_pct=round(distance_pct, 2),
-                rsi=round(rsi_value, 1),
-                pattern_detected=True,
-                message=f"Pattern: {pattern_name} → 50% schließen",
-            )
+            pname = self._which_pattern(opens, highs, lows, closes, side.upper())
+            return sig(symbol, side, ExitReason.PATTERN, 0.5, price, ema20, round(dist, 2),
+                      round(rsi_val, 1), True, True,
+                      f"[PATTERN] {pname} → 50% schließen + SL auf Break-Even")
 
-        # ─── B) Strukturell (100%) ─────────────────────────────
+        # ─── Stufe 2: Strukturell (100%) ───────────────────────
 
-        # B1: EMA overextended (> 2.5%)
-        if distance_pct > cfg_exit["ema_overextended_pct"]:
-            return ExitSignal(
-                symbol=symbol, side=side,
-                reason=ExitReason.EMA_OVEREXTENDED,
-                close_pct=1.0,
-                price=current_price, ema20=ema20,
-                distance_pct=round(distance_pct, 2),
-                rsi=round(rsi_value, 1),
-                pattern_detected=False,
-                message=f"EMA overextended: {distance_pct:.2f}% → 100% schließen",
-            )
+        # B1: EMA overextended
+        if dist > cfg_exit["ema_overextended_pct"]:
+            return sig(symbol, side, ExitReason.EMA_OVEREXTENDED, 1.0, price, ema20,
+                      round(dist, 2), round(rsi_val, 1),
+                      msg=f"[STRUKTURELL] EMA {dist:.1f}% entfernt → 100%")
 
-        # B2: RSI extreme (nur bei Step 4+)
+        # B2: RSI extrem (ab Step 4)
         if current_step >= 4:
-            rsi_extreme_long = cfg_exit["rsi_extreme_long"]
-            rsi_extreme_short = cfg_exit["rsi_extreme_short"]
+            if side == "long" and rsi_val > cfg_exit["rsi_extreme_long"]:
+                return sig(symbol, side, ExitReason.RSI_EXTREME, 1.0, price, ema20,
+                          round(dist, 2), round(rsi_val, 1),
+                          msg=f"[STRUKTURELL] RSI {rsi_val:.0f} extrem → 100%")
+            elif side == "short" and rsi_val < cfg_exit["rsi_extreme_short"]:
+                return sig(symbol, side, ExitReason.RSI_EXTREME, 1.0, price, ema20,
+                          round(dist, 2), round(rsi_val, 1),
+                          msg=f"[STRUKTURELL] RSI {rsi_val:.0f} extrem → 100%")
 
-            if side == "long" and rsi_value > rsi_extreme_long:
-                return ExitSignal(
-                    symbol=symbol, side=side,
-                    reason=ExitReason.RSI_EXTREME,
-                    close_pct=1.0,
-                    price=current_price, ema20=ema20,
-                    distance_pct=round(distance_pct, 2),
-                    rsi=round(rsi_value, 1),
-                    pattern_detected=False,
-                    message=f"RSI {rsi_value:.1f} > {rsi_extreme_long} bei Step {current_step}",
-                )
-            elif side == "short" and rsi_value < rsi_extreme_short:
-                return ExitSignal(
-                    symbol=symbol, side=side,
-                    reason=ExitReason.RSI_EXTREME,
-                    close_pct=1.0,
-                    price=current_price, ema20=ema20,
-                    distance_pct=round(distance_pct, 2),
-                    rsi=round(rsi_value, 1),
-                    pattern_detected=False,
-                    message=f"RSI {rsi_value:.1f} < {rsi_extreme_short} bei Step {current_step}",
-                )
-
-        # B3: S/R Level erreicht
+        # B3: S/R erreicht
         try:
             sr = self._sr_calc.calculate(symbol)
             if side == "long":
-                res = sr.nearest_resistance(current_price)
-                if res and current_price >= res * 0.998:  # within 0.2% of resistance
-                    return ExitSignal(
-                        symbol=symbol, side=side,
-                        reason=ExitReason.SR_REACHED,
-                        close_pct=1.0,
-                        price=current_price, ema20=ema20,
-                        distance_pct=round(distance_pct, 2),
-                        rsi=round(rsi_value, 1),
-                        pattern_detected=False,
-                        message=f"Resistance {res:.4f} erreicht",
-                    )
-            else:  # short
-                sup = sr.nearest_support(current_price)
-                if sup and current_price <= sup * 1.002:  # within 0.2% of support
-                    return ExitSignal(
-                        symbol=symbol, side=side,
-                        reason=ExitReason.SR_REACHED,
-                        close_pct=1.0,
-                        price=current_price, ema20=ema20,
-                        distance_pct=round(distance_pct, 2),
-                        rsi=round(rsi_value, 1),
-                        pattern_detected=False,
-                        message=f"Support {sup:.4f} erreicht",
-                    )
+                res = sr.nearest_resistance(price)
+                if res and price >= res * 0.998:
+                    return sig(symbol, side, ExitReason.SR_REACHED, 1.0, price, ema20,
+                              round(dist, 2), round(rsi_val, 1),
+                              msg=f"[STRUKTURELL] Resistance {res:.4f} erreicht → 100%")
+            else:
+                sup = sr.nearest_support(price)
+                if sup and price <= sup * 1.002:
+                    return sig(symbol, side, ExitReason.SR_REACHED, 1.0, price, ema20,
+                              round(dist, 2), round(rsi_val, 1),
+                              msg=f"[STRUKTURELL] Support {sup:.4f} erreicht → 100%")
         except Exception:
             pass
 
-        # ─── Stop-Loss Check ───────────────────────────────────
+        # B4: Stop-Loss
+        if side == "long" and price <= stop_loss:
+            return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
+                      round(dist, 2), round(rsi_val, 1),
+                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
+        elif side == "short" and price >= stop_loss:
+            return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
+                      round(dist, 2), round(rsi_val, 1),
+                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
 
-        if side == "long" and current_price <= stop_loss:
-            return ExitSignal(
-                symbol=symbol, side=side,
-                reason=ExitReason.STOP_LOSS,
-                close_pct=1.0, price=current_price, ema20=ema20,
-                distance_pct=round(distance_pct, 2),
-                rsi=round(rsi_value, 1),
-                pattern_detected=False,
-                message=f"Stop-Loss getriggert @ {stop_loss:.6f}",
-            )
-        elif side == "short" and current_price >= stop_loss:
-            return ExitSignal(
-                symbol=symbol, side=side,
-                reason=ExitReason.STOP_LOSS,
-                close_pct=1.0, price=current_price, ema20=ema20,
-                distance_pct=round(distance_pct, 2),
-                rsi=round(rsi_value, 1),
-                pattern_detected=False,
-                message=f"Stop-Loss getriggert @ {stop_loss:.6f}",
-            )
+        # Kein Exit
+        return ns
 
-        # ─── Trailing Stop Update ──────────────────────────────
-
-        # (Handled by watcher.py)
-
-        return ExitSignal(
-            symbol=symbol, side=side, reason=ExitReason.NONE,
-            close_pct=0, price=current_price, ema20=ema20,
-            distance_pct=round(distance_pct, 2),
-            rsi=round(rsi_value, 1),
-            pattern_detected=False, message="Kein Exit-Signal",
-        )
-
-    def _which_pattern(
-        self, opens, highs, lows, closes, side: str,
-    ) -> str:
-        """Identifiziert welches Pattern getriggert hat."""
+    def _which_pattern(self, opens, highs, lows, closes, side: str) -> str:
         from patterns import detect_exit_pattern_talib, HAS_TALIB
-
         if not HAS_TALIB:
-            return "Pattern (pure)"
+            return "Candlestick"
 
         o = np.asarray(opens, dtype=float)
         h = np.asarray(highs, dtype=float)
         l = np.asarray(lows, dtype=float)
         c = np.asarray(closes, dtype=float)
 
-        if side == "LONG":
-            patterns = {
-                "Shooting Star": talib.CDLSHOOTINGSTAR(o, h, l, c)[-1],
-                "Bearish Engulfing": talib.CDLENGULFING(o, h, l, c)[-1],
-                "Evening Star": talib.CDLEVENINGSTAR(o, h, l, c)[-1],
-                "Dark Cloud Cover": talib.CDLDARKCLOUDCOVER(o, h, l, c)[-1],
-            }
-        else:
-            patterns = {
-                "Hammer": talib.CDLHAMMER(o, h, l, c)[-1],
-                "Bullish Engulfing": talib.CDLENGULFING(o, h, l, c)[-1],
-                "Morning Star": talib.CDLMORNINGSTAR(o, h, l, c)[-1],
-                "Piercing": talib.CDLPIERCING(o, h, l, c)[-1],
-            }
-
-        import talib  # noqa: F811
-        for name, val in patterns.items():
-            if (side == "LONG" and val < 0) or (side == "SHORT" and val > 0):
+        pairs = {
+            "LONG": [
+                ("Shooting Star", talib.CDLSHOOTINGSTAR(o, h, l, c)[-1] < 0),
+                ("Bearish Engulfing", talib.CDLENGULFING(o, h, l, c)[-1] < 0),
+                ("Evening Star", talib.CDLEVENINGSTAR(o, h, l, c)[-1] < 0),
+                ("Dark Cloud", talib.CDLDARKCLOUDCOVER(o, h, l, c)[-1] < 0),
+            ],
+            "SHORT": [
+                ("Hammer", talib.CDLHAMMER(o, h, l, c)[-1] > 0),
+                ("Bullish Engulfing", talib.CDLENGULFING(o, h, l, c)[-1] > 0),
+                ("Morning Star", talib.CDLMORNINGSTAR(o, h, l, c)[-1] > 0),
+                ("Piercing", talib.CDLPIERCING(o, h, l, c)[-1] > 0),
+            ],
+        }
+        import talib  # noqa
+        for name, hit in pairs.get(side, []):
+            if hit:
                 return name
-        return "Unknown"
+        return "Candlestick"

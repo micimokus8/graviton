@@ -216,18 +216,47 @@ def main():
                 pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
                       else ((entry_price - sig.price) / entry_price * 100)
 
-                exit_msg = (
-                    f"📤 {mode} EXIT {bias} {base}\n"
-                    f"   Grund:  {sig.reason.value}\n"
-                    f"   Close:  {pct}%\n"
-                    f"   Preis:  {sig.price:.6f}\n"
-                    f"   PnL:    {pnl:+.2f}%\n"
-                    f"   RSI:    {sig.rsi}"
-                )
-                print(exit_msg); tg(exit_msg)
+                # Stufe 1: Pattern (50% close)
+                if sig.reason == ExitReason.PATTERN:
+                    level = "1/3"
+                    exit_msg = (
+                        f"📤 {mode} EXIT {pct}% {bias} {base}\n"
+                        f"   Level:  {level} — {sig.reason.value}\n"
+                        f"   Preis:  {sig.price:.6f}\n"
+                        f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
+                        f"   Info:   {sig.message}\n"
+                        f"   → Rest läuft mit SL auf Break-Even"
+                    )
+                    print(exit_msg); tg(exit_msg)
 
-                if pct >= 100:
-                    break
+                    # Move SL to breakeven
+                    if not DRY_RUN:
+                        from trader import KrakenTrader
+                        trader2 = KrakenTrader()
+                        trader2.set_stop_loss(symbol, bias.lower(), entry_price)
+                        print(f"  → SL auf Break-Even verschoben: {entry_price:.6f}")
+                    else:
+                        print(f"  DRY RUN: SL auf Break-Even ({entry_price:.6f})")
+
+                # Stufe 2: Strukturell (100% close)
+                elif sig.reason in (ExitReason.EMA_OVEREXTENDED, ExitReason.SR_REACHED,
+                                     ExitReason.RSI_EXTREME, ExitReason.STOP_LOSS):
+                    level = "2/3"
+                    exit_msg = (
+                        f"📤 {mode} EXIT {pct}% {bias} {base}\n"
+                        f"   Level:  {level} — {sig.reason.value}\n"
+                        f"   Preis:  {sig.price:.6f}\n"
+                        f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
+                        f"   Info:   {sig.message}"
+                    )
+                    print(exit_msg); tg(exit_msg)
+
+                    # LIVE close
+                    if not DRY_RUN:
+                        from trader import KrakenTrader
+                        trader2 = KrakenTrader()
+                        trader2.close_position(symbol, bias.lower())
+                    break  # Position komplett zu
 
         except Exception as e:
             print(f"  Watcher-Fehler: {e}")
@@ -236,10 +265,17 @@ def main():
 
     # ─── Phase 4: Session End ────────────────────────────────────
 
-    end_msg = f"✅ [{name}] Session Ende — {_ts_str()}"
+    end_msg = f"📤 {mode} EXIT 100% {bias} {base}\n   Level:  3/3 — session_end\n   Info:   Session-Ende → Zwangsschluss"
+
     if entered:
-        end_msg += f"\n   1 Signal (dry run)"
-    print(end_msg); tg(end_msg)
+        print(end_msg); tg(end_msg)
+        if not DRY_RUN:
+            from trader import KrakenTrader
+            trader = KrakenTrader()
+            trader.close_position(symbol, bias.lower())
+
+    print(f"✅ [{name}] Session Ende — {_ts_str()}" + (" (1 Signal, dry run)" if entered else ""))
+    tg(f"✅ [{name}] Session Ende — {_ts_str()}")
 
     ENTRY_STATE_FILE.unlink(missing_ok=True)
 
