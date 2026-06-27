@@ -94,12 +94,17 @@ class SRCalculator:
         """
         ex = self._get_exchange()
 
-        # Weekly candles (2 Wochen = 2 candles)
+        # Weekly candles (limit=4: -4/-3 = vollständig, -2/-1 = aktuell/laufend)
         try:
-            weekly = ex.fetch_ohlcv(symbol, timeframe="1w", limit=3)
-            if weekly and len(weekly) >= 2:
-                weekly_high = max(float(c[2]) for c in weekly[-2:])
-                weekly_low  = min(float(c[3]) for c in weekly[-2:])
+            weekly = ex.fetch_ohlcv(symbol, timeframe="1w", limit=4)
+            if weekly and len(weekly) >= 3:
+                # Nur abgeschlossene Wochen: [-3] und [-2] (skip [-1] = aktuell)
+                completed = weekly[-3:-1]
+                weekly_high = max(float(c[2]) for c in completed)
+                weekly_low  = min(float(c[3]) for c in completed)
+            elif weekly and len(weekly) >= 2:
+                weekly_high = float(weekly[0][2])
+                weekly_low  = float(weekly[0][3])
             else:
                 weekly_high = weekly_low = 0.0
         except Exception:
