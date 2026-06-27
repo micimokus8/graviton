@@ -85,8 +85,8 @@ class KrakenScanner:
             ticker = spot.fetch_ticker("EUR/USD")
             if ticker and ticker.get("last"):
                 self._eur_usd_rate = float(ticker["last"])
-        except Exception:
-            pass  # fallback to default
+        except Exception as e:
+            print(f"[Scanner] EUR/USD Update fehlgeschlagen: {e} — nutze Fallback {self._eur_usd_rate:.4f}")
 
     # ─── Perp Markets ──────────────────────────────────────────
 
@@ -133,6 +133,7 @@ class KrakenScanner:
                 try:
                     all_tickers[sym] = ex.fetch_ticker(sym)
                 except Exception:
+                    print(f"[Scanner] skip {sym} — fetch fehlgeschlagen")
                     continue
 
         results: List[ScanResult] = []
