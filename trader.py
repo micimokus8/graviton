@@ -179,17 +179,11 @@ class KrakenTrader:
     def calc_position_size(self) -> float:
         """
         Berechnet Position Size in USD.
-        15% Account Equity, equal distribution über 4 Steps.
+        17.5% Account Equity = ~$100 für einen Trade.
         """
         equity = self.get_equity()
-        cfg_pos = CFG.position
-        risk_pct = cfg_pos["account_risk_pct_per_coin"] / 100  # 0.15
-        total_for_coin = equity * risk_pct
-
-        max_steps = CFG.entry["max_stair_steps"]
-        per_step = total_for_coin / max_steps  # 3.75% pro Stufe
-
-        return per_step
+        risk_pct = CFG.position["account_risk_pct_per_coin"] / 100
+        return equity * risk_pct
 
     def get_position_size_contracts(self, symbol: str, usd_amount: float) -> float:
         """

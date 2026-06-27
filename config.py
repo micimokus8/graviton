@@ -69,12 +69,11 @@ BIAS = {
 ENTRY = {
     "timeframe":          "1m",
     "ema_period":         20,
-    "ema_smoothing":      9,          # SMA-Glättung der EMA (optional, für noise-reduction)
-    "ema_distance_max":   0.30,       # % Abstand zur EMA für Entry
-    "sl_offset_pct":      0.20,       # % über/unter Rejection-Kerze
-    "max_stair_steps":    4,          # max Treppenstufen pro Coin
-    "stair_mode":         "pullback_add",  # nur bei neuer EMA-Annäherung
-    "max_parallel_coins": 1,          # Start: 1, nach 2 Wochen → 2
+    "ema_smoothing":      9,
+    "ema_distance_max":   0.30,
+    "sl_offset_pct":      0.20,
+    "max_stair_steps":    1,          # Start: nur erster Pullback
+    "max_parallel_coins": 1,
 }
 
 # ─── S/R Kontext ───────────────────────────────────────────────────
@@ -87,9 +86,8 @@ SR = {
 # ─── Position Sizing ───────────────────────────────────────────────
 
 POSITION = {
-    "account_risk_pct_per_coin":  17.5,   # ~100 USD bei 570 USD Equity
-    "steps_distribution":         "equal",
-    "max_total_exposure_pct":     35.0,
+    "account_risk_pct_per_coin":  17.5,   # ~$100 bei $570 Equity
+    "max_total_exposure_pct":     17.5,   # = 1 Position
 }
 
 # ─── Exit ──────────────────────────────────────────────────────────
