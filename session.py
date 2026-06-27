@@ -121,17 +121,25 @@ def main():
 
     # ─── Phase 2: Entry Polling ──────────────────────────────────
 
-    candidate = candidates[0]
-    symbol = candidate["symbol"]
-    bias = candidate["bias"]
-    base = candidate["base"]
+    # Iteriere Kandidaten, nimm ersten nicht-geblockten
+    entry_candidate = None
+    for cand in candidates:
+        blocked, reason, sr = check_sr_for_entry(cand["symbol"], cand["price"], cand["bias"])
+        if not blocked:
+            entry_candidate = cand
+            break
+        else:
+            print(f"🚫 {cand['base']}: S/R-Block — {reason}")
+            tg(f"🚫 [{name}] {cand['base']}: S/R-Block — {reason}")
 
-    # S/R Check
-    blocked, reason, sr = check_sr_for_entry(symbol, candidate["price"], bias)
-    if blocked:
-        msg = f"🚫 [{name}] {base}: S/R-Block — {reason}"
+    if entry_candidate is None:
+        msg = f"⚠️ [{name}] Alle Kandidaten durch S/R geblockt — Session beendet."
         print(msg); tg(msg)
         return
+
+    symbol = entry_candidate["symbol"]
+    bias = entry_candidate["bias"]
+    base = entry_candidate["base"]
 
     msg = f"👁 [{name}] Entry-Polling {base} ({bias}) — alle 30s"
     print(msg); tg(msg)
@@ -183,16 +191,21 @@ def main():
                 break
 
             elif signal.state == EntryState.AT_EMA:
-                # Only log every 5 min to avoid spam
                 now_sec = time.time()
                 if now_sec - last_ema_msg_time > 300:
                     print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
+                    tg(f"⏳ [{name}] {base} an EMA20 ({signal.distance_pct:.2f}%) — warte auf Pullback")
                     last_ema_msg_time = now_sec
 
         except Exception as e:
             print(f"  Entry-Fehler: {e}")
 
         time.sleep(30)
+
+    # Entry-Loop beendet (Session-Ende ohne Signal)
+    if not entered:
+        msg = f"⏱ [{name}] {base}: Kein Entry-Signal bis Session-Ende"
+        print(msg); tg(msg)
 
     # ─── Phase 3: Watcher ────────────────────────────────────────
 
@@ -203,12 +216,16 @@ def main():
 
     print(f"[{_ts_str()}] Watcher aktiv — überwache {base} {bias}...")
 
+    # Mutable state — updated during watcher loop
+    current_step = 1
+    stop_loss_active = stop_loss
+
     while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
         try:
             sig = exit_engine.check(
                 symbol=symbol, side=bias.lower(),
-                entry_price=entry_price, stop_loss=stop_loss,
-                current_step=1,
+                entry_price=entry_price, stop_loss=stop_loss_active,
+                current_step=current_step,
             )
 
             if sig.reason != ExitReason.NONE:
@@ -229,7 +246,10 @@ def main():
                     )
                     print(exit_msg); tg(exit_msg)
 
-                    # Move SL to breakeven
+                    # Update state — SL auf Break-Even, nächste Stufe
+                    stop_loss_active = entry_price
+                    current_step = 2
+
                     if not DRY_RUN:
                         from trader import KrakenTrader
                         trader2 = KrakenTrader()
@@ -256,7 +276,8 @@ def main():
                         from trader import KrakenTrader
                         trader2 = KrakenTrader()
                         trader2.close_position(symbol, bias.lower())
-                    break  # Position komplett zu
+                    entered = False  # Position komplett zu
+                    break
 
         except Exception as e:
             print(f"  Watcher-Fehler: {e}")

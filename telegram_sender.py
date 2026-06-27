@@ -21,7 +21,15 @@ def _load_config():
 
     # Try environment first
     _TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    _CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "") or os.getenv("TELEGRAM_ALLOWED_USERS", "")
+    _CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+    if not _CHAT_ID:
+        _CHAT_ID = os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")[0].strip()
+        if _CHAT_ID and not _CHAT_ID.isdigit():
+            _CHAT_ID = ""
+
+    if not _CHAT_ID:
+        _CHAT_ID = os.getenv("TELEGRAM_HOME_CHANNEL", "")
 
     if not _TOKEN:
         # Load from Hermes .env
