@@ -36,7 +36,9 @@ def _env_float(key: str, default: float = 0.0) -> float:
         return default
 
 
-# ─── Sessions ──────────────────────────────────────────────────────
+# ─── Mode ──────────────────────────────────────────────────────────
+
+DRY_RUN = True  # True = kein Live-Trading, nur Logs
 
 SESSIONS = {
     "ny":   {"scan": "13:00", "open": "13:30", "close": "16:00"},

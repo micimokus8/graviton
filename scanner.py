@@ -224,6 +224,8 @@ def run_scan() -> List[ScanResult]:
     print(f"{'═'*70}")
     if not results:
         print("  Keine Coins gefunden die den Filter passen.")
+        # Save empty watchlist
+        _save_watchlist(results)
         return results
 
     print(f"  {'Coin':<10} {'Change':>8} {'Price':>10} {'Vol($)':>14} {'Bid':>10} {'Ask':>10}")
@@ -234,7 +236,30 @@ def run_scan() -> List[ScanResult]:
               f"${r.price:>9.4f} ${r.volume_24h_usd:>13,.0f} "
               f"${r.bid:>9.4f} ${r.ask:>9.4f}")
     print(f"{'═'*70}")
+
+    # Save for pipeline
+    _save_watchlist(results)
     return results
+
+
+def _save_watchlist(results: List[ScanResult]):
+    """Speichert Watchlist als JSON für Bias-Pipeline."""
+    import json
+    data_dir = Path(__file__).parent / "data"
+    data_dir.mkdir(exist_ok=True)
+    watchlist = [
+        {
+            "symbol": r.symbol,
+            "base": r.base,
+            "price": r.price,
+            "change_24h_pct": r.change_24h_pct,
+            "volume_24h_usd": r.volume_24h_usd,
+            "scanned_at": r.scanned_at,
+        }
+        for r in results
+    ]
+    with open(data_dir / "watchlist.json", "w") as f:
+        json.dump(watchlist, f, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════
