@@ -115,17 +115,56 @@ class KrakenTrader:
 
     # ─── Account ───────────────────────────────────────────────
 
+    def _fetch_eur_usd_rate(self) -> float:
+        """Holt aktuellen EUR/USD Kurs (public, kein API-Key nötig)."""
+        try:
+            ticker = self._get_exchange().fetch_ticker("EUR/USD:USD")
+            return float(ticker.get("last", 1.08) or 1.08)
+        except Exception:
+            return 1.08
+
     def get_equity(self) -> float:
-        """Holt aktuelles Account-Equity (USD)."""
+        """
+        Holt aktuelles Account-Equity in USD.
+        Kraken Futures Flex-Wallet: Collateral in EUR/andere,
+        aber Trading in USD. Konvertiert automatisch.
+        """
         if self._equity is not None:
             return self._equity
         try:
             ex = self._get_exchange()
-            balance = ex.fetch_balance()
-            total = float(balance.get("total", {}).get("USD", 0) or balance.get("total", {}).get("USDT", 0) or 0)
-            free = float(balance.get("free", {}).get("USD", 0) or balance.get("free", {}).get("USDT", 0) or 0)
-            self._equity = max(total, free)
+            # Flex-Wallet (Multi-Currency Collateral)
+            balance = ex.fetch_balance({"type": "flex"})
+            total_dict = balance.get("total", {})
+
+            # Direkt USD?
+            usd = float(total_dict.get("USD", 0) or 0)
+            if usd > 0:
+                self._equity = usd
+                return self._equity
+
+            # EUR → USD konvertieren
+            eur = float(total_dict.get("EUR", 0) or 0)
+            if eur > 0:
+                rate = self._fetch_eur_usd_rate()
+                self._equity = eur * rate
+                return self._equity
+
+            # Andere Währungen summieren (falls vorhanden)
+            total_usd = 0.0
+            for currency, amount in total_dict.items():
+                amt = float(amount or 0)
+                if amt <= 0:
+                    continue
+                if currency == "USD":
+                    total_usd += amt
+                elif currency == "EUR":
+                    total_usd += amt * self._fetch_eur_usd_rate()
+                # Andere Währungen ignorieren wir erstmal
+
+            self._equity = total_usd if total_usd > 0 else float(os.getenv("EQUITY_USD", "200"))
             return self._equity
+
         except Exception as e:
             print(f"[Trader] Konnte Balance nicht laden: {e}")
             return float(os.getenv("EQUITY_USD", "200"))
