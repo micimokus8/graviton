@@ -187,7 +187,7 @@ def main():
 
                 with open(ENTRY_STATE_FILE, "w") as f:
                     json.dump({
-                        "entered": True, "symbol": symbol, "bias": bias,
+                        "entered": entered, "symbol": symbol, "bias": bias,
                         "entry": entry_price, "sl": stop_loss,
                         "time": datetime.now(timezone.utc).isoformat(),
                     }, f, indent=2)
@@ -256,10 +256,11 @@ def main():
                     if not DRY_RUN:
                         from trader import KrakenTrader
                         trader2 = KrakenTrader()
+                        trader2.close_position(symbol, bias.lower(), close_pct=0.5)
                         trader2.set_stop_loss(symbol, bias.lower(), entry_price)
-                        print(f"  → SL auf Break-Even verschoben: {entry_price:.6f}")
+                        print(f"  → 50% geschlossen + SL auf Break-Even: {entry_price:.6f}")
                     else:
-                        print(f"  DRY RUN: SL auf Break-Even ({entry_price:.6f})")
+                        print(f"  DRY RUN: 50% Close + SL auf Break-Even ({entry_price:.6f})")
 
                 # Stufe 2: Strukturell (100% close)
                 elif sig.reason in (ExitReason.EMA_OVEREXTENDED, ExitReason.SR_REACHED,
