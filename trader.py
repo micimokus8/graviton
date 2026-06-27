@@ -4,14 +4,13 @@ graviton/trader.py — CCXT Kraken Futures Order Execution
 ==========================================================
 Platziert Market-Orders + Stop-Loss auf Kraken Perpetuals via CCXT.
 
-API Keys werden aus .env oder Umgebungsvariablen geladen:
-  KRAKEN_API_KEY, KRAKEN_API_SECRET
+SL-Setzung:
+  - Bei Entry: Market-Order, dann SOFORT Stop-Loss nachlegen
+  - Nachträglich: set_stop_loss() prüft ob schon SL existiert
+  - Watcher: check_sl_exists() → set_stop_loss() wenn nötig
 
-Features:
-  - Market-Order Entry
-  - Stop-Loss via Limit-Order (Kraken Futures: "stop" order type)
-  - Position Sizing: 15% Equity pro Coin, 4 Treppen (equal distribution)
-  - Close Position (Market)
+Kraken Futures API hat kein natives Position-SL. Stattdessen:
+Stop-Order mit reduceOnly=True. Funktional identisch.
 """
 
 from __future__ import annotations
@@ -51,32 +50,17 @@ KRAKEN_SECRET = os.getenv("KRAKEN_API_SECRET", "")
 
 @dataclass
 class TradeResult:
-    """Ergebnis einer Order-Platzierung."""
     success: bool
     symbol: str
-    side: str           # "long" oder "short"
+    side: str
     order_id: str
     price: float
-    size: float         # Contracts / Menge
-    cost: float         # USD Wert
+    size: float
+    cost: float
     stop_loss: float
-    step: int           # Treppenstufe
+    step: int
     message: str
     timestamp: str
-
-
-@dataclass
-class Position:
-    """Aktive Position."""
-    symbol: str
-    side: str
-    size: float
-    entry_price: float
-    stop_loss: float
-    current_price: float
-    pnl_pct: float
-    steps: int
-    opened_at: str
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -84,39 +68,26 @@ class Position:
 # ═══════════════════════════════════════════════════════════════════
 
 class KrakenTrader:
-    """
-    Führt Trades auf Kraken Futures aus.
-    Nutzt CCXT mit API-Key Authentifizierung.
-    """
 
     def __init__(self):
         self._exchange: Optional[ccxt.Exchange] = None
         self._equity: Optional[float] = None
-        self._active_positions: Dict[str, dict] = {}
-
-    # ─── Exchange ──────────────────────────────────────────────
 
     def _get_exchange(self) -> ccxt.Exchange:
-        """Lazy-init authenticated CCXT exchange."""
         if self._exchange is None:
             if not KRAKEN_KEY or not KRAKEN_SECRET:
-                raise RuntimeError(
-                    "KRAKEN_API_KEY und KRAKEN_API_SECRET nicht gesetzt! "
-                    "Bitte in .env eintragen."
-                )
+                raise RuntimeError("KRAKEN_API_KEY + KRAKEN_API_SECRET fehlen!")
             self._exchange = ccxt.krakenfutures({
                 "apiKey": KRAKEN_KEY,
                 "secret": KRAKEN_SECRET,
                 "enableRateLimit": True,
                 "options": {"defaultType": "swap"},
             })
-            # Kein load_markets() nötig für private endpoints wenn public schon geladen
         return self._exchange
 
     # ─── Account ───────────────────────────────────────────────
 
     def _fetch_eur_usd_rate(self) -> float:
-        """Holt aktuellen EUR/USD Kurs (public, kein API-Key nötig)."""
         try:
             ticker = self._get_exchange().fetch_ticker("EUR/USD:USD")
             return float(ticker.get("last", 1.08) or 1.08)
@@ -124,151 +95,86 @@ class KrakenTrader:
             return 1.08
 
     def get_equity(self) -> float:
-        """
-        Holt aktuelles Account-Equity in USD.
-        Kraken Futures Flex-Wallet: Collateral in EUR/andere,
-        aber Trading in USD. Konvertiert automatisch.
-        """
         if self._equity is not None:
             return self._equity
         try:
             ex = self._get_exchange()
-            # Flex-Wallet (Multi-Currency Collateral)
             balance = ex.fetch_balance({"type": "flex"})
             total_dict = balance.get("total", {})
-
-            # Direkt USD?
             usd = float(total_dict.get("USD", 0) or 0)
             if usd > 0:
                 self._equity = usd
                 return self._equity
-
-            # EUR → USD konvertieren
             eur = float(total_dict.get("EUR", 0) or 0)
             if eur > 0:
-                rate = self._fetch_eur_usd_rate()
-                self._equity = eur * rate
+                self._equity = eur * self._fetch_eur_usd_rate()
                 return self._equity
-
-            # Andere Währungen summieren (falls vorhanden)
-            total_usd = 0.0
-            for currency, amount in total_dict.items():
-                amt = float(amount or 0)
-                if amt <= 0:
-                    continue
-                if currency == "USD":
-                    total_usd += amt
-                elif currency == "EUR":
-                    total_usd += amt * self._fetch_eur_usd_rate()
-                # Andere Währungen ignorieren wir erstmal
-
-            self._equity = total_usd if total_usd > 0 else float(os.getenv("EQUITY_USD", "200"))
+            self._equity = float(os.getenv("EQUITY_USD", "200"))
             return self._equity
-
         except Exception as e:
-            print(f"[Trader] Konnte Balance nicht laden: {e}")
+            print(f"[Trader] Balance-Fehler: {e}")
             return float(os.getenv("EQUITY_USD", "200"))
 
     def refresh_equity(self) -> float:
-        """Equity neu laden."""
         self._equity = None
         return self.get_equity()
 
     # ─── Position Sizing ───────────────────────────────────────
 
     def calc_position_size(self) -> float:
-        """
-        Berechnet Position Size in USD.
-        17.5% Account Equity = ~$100 für einen Trade.
-        """
         equity = self.get_equity()
         risk_pct = CFG.position["account_risk_pct_per_coin"] / 100
         return equity * risk_pct
 
     def get_position_size_contracts(self, symbol: str, usd_amount: float) -> float:
-        """
-        Konvertiert USD-Betrag in Kontrakt-Anzahl.
-        Kraken Futures: linear contracts, 1 contract = 1 USD notional (typisch).
-        """
         try:
             ex = self._get_exchange()
             market = ex.market(symbol)
-            contract_size = market.get("contractSize", 1)
-            min_amount = market.get("limits", {}).get("amount", {}).get("min", 1)
-
-            # Bei linearen Perps: size ≈ usd_amount / price
             ticker = ex.fetch_ticker(symbol)
             price = float(ticker["last"])
-
-            contracts = usd_amount / (contract_size * price) if contract_size > 0 else usd_amount / price
+            contracts = usd_amount / price
+            min_amount = market.get("limits", {}).get("amount", {}).get("min", 1)
             contracts = max(contracts, min_amount or 1)
-
-            # Runde auf erlaubte Precision
-            amount_precision = market.get("precision", {}).get("amount", 8)
-            contracts = round(contracts, amount_precision)
-
             return contracts
         except Exception as e:
-            print(f"[Trader] Konnte Kontraktgröße nicht berechnen: {e}")
+            print(f"[Trader] Kontraktgröße: {e}")
             return 0
 
     def set_leverage(self, symbol: str, leverage: int = 1) -> bool:
-        """Setzt Leverage für Symbol (Default: 1x)."""
         try:
-            ex = self._get_exchange()
-            ex.set_leverage(leverage, symbol)
+            self._get_exchange().set_leverage(leverage, symbol)
             return True
         except Exception as e:
-            print(f"[Trader] Leverage-Set Fehler ({symbol}): {e}")
+            print(f"[Trader] Leverage: {e}")
             return False
 
     # ─── Entry Order ───────────────────────────────────────────
 
     def enter_position(
-        self,
-        symbol: str,
-        side: str,       # "long" oder "short"
+        self, symbol: str, side: str,
         size_usd: Optional[float] = None,
+        stop_loss: float = 0.0,
         step: int = 1,
     ) -> TradeResult:
         """
-        Öffnet eine Position via Market Order.
-
-        Args:
-            symbol: CCXT Symbol
-            side: "long" oder "short"
-            size_usd: Positionsgröße in USD (None = auto-calc)
-            step: Treppenstufe (1-4)
-
-        Returns:
-            TradeResult
+        Öffnet Position via Market Order + setzt sofort Stop-Loss.
         """
         if not KRAKEN_KEY:
-            return TradeResult(
-                success=False, symbol=symbol, side=side,
-                order_id="", price=0, size=0, cost=0, stop_loss=0,
-                step=step, message="Keine API Keys konfiguriert (DRY RUN)",
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
+            return TradeResult(False, symbol, side, "", 0, 0, 0, stop_loss, step,
+                             "DRY RUN", datetime.now(timezone.utc).isoformat())
 
         try:
             ex = self._get_exchange()
-
-            # Set leverage + isolated margin
+            ex.load_markets()
             self.set_leverage(symbol, CFG.exchange["leverage"])
-            print(f"[Trader] Leverage: {CFG.exchange['leverage']}x {CFG.exchange['margin']}")
 
             if size_usd is None:
                 size_usd = self.calc_position_size()
 
             size_contracts = self.get_position_size_contracts(symbol, size_usd)
             if size_contracts <= 0:
-                return TradeResult(
-                    success=False, symbol=symbol, side=side,
-                    order_id="", price=0, size=0, cost=size_usd, stop_loss=0,
-                    step=step, message="Kontraktgröße ≤ 0",
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                )
+                return TradeResult(False, symbol, side, "", 0, 0, size_usd, stop_loss, step,
+                                 "Kontraktgröße ≤ 0", datetime.now(timezone.utc).isoformat())
 
             # Market Order
             if side == "long":
@@ -276,116 +182,137 @@ class KrakenTrader:
             else:
                 order = ex.create_market_sell_order(symbol, size_contracts)
 
-            order_id = str(order.get("id", "unknown"))
+            order_id = str(order.get("id", ""))
             avg_price = float(order.get("average", order.get("price", 0)) or 0)
             cost = float(order.get("cost", 0) or 0)
 
-            print(f"[Trader] {side.upper()} Entry: {symbol} "
-                  f"size={size_contracts} @ ~{avg_price:.6f} (Step {step})")
+            # Auto-SL wenn Stop-Loss mitgegeben
+            sl_actual = stop_loss
+            if stop_loss <= 0:
+                ticker = ex.fetch_ticker(symbol)
+                price_now = float(ticker["last"])
+                sl_offset = CFG.entry["sl_offset_pct"] / 100
+                sl_actual = round(price_now * (1 + sl_offset) if side == "short" else price_now * (1 - sl_offset), 6)
 
-            return TradeResult(
-                success=True,
-                symbol=symbol,
-                side=side,
-                order_id=order_id,
-                price=avg_price or 0,
-                size=size_contracts,
-                cost=cost,
-                stop_loss=0,  # wird separat gesetzt
-                step=step,
-                message=f"Entry {side.upper()} {symbol}",
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
+            sl_ok = self.set_stop_loss(symbol, side, sl_actual, size_contracts)
+            if sl_ok:
+                print(f"[Trader] {side.upper()} {symbol}: {size_contracts} @ {avg_price:.6f} | SL: {sl_actual:.6f}")
+            else:
+                print(f"[Trader] {side.upper()} {symbol}: {size_contracts} @ {avg_price:.6f} | SL: FEHLER!")
+
+            return TradeResult(True, symbol, side, order_id, avg_price or 0,
+                             size_contracts, cost, sl_actual, step,
+                             f"Entry {side.upper()}", datetime.now(timezone.utc).isoformat())
 
         except Exception as e:
-            error_msg = str(e)
-            print(f"[Trader] Entry ERROR: {error_msg}")
-            return TradeResult(
-                success=False, symbol=symbol, side=side,
-                order_id="", price=0, size=0, cost=0, stop_loss=0,
-                step=step, message=error_msg,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
+            print(f"[Trader] Entry ERROR: {e}")
+            return TradeResult(False, symbol, side, "", 0, 0, 0, 0, step,
+                             str(e), datetime.now(timezone.utc).isoformat())
 
     # ─── Stop Loss ─────────────────────────────────────────────
 
-    def set_stop_loss(
-        self,
-        symbol: str,
-        side: str,
-        stop_price: float,
-        amount: Optional[float] = None,
-    ) -> bool:
-        """
-        Setzt einen Stop-Loss via "stop" Limit-Order.
+    def has_stop_loss(self, symbol: str) -> bool:
+        """Prüft ob Position bereits einen Stop-Loss hat."""
+        try:
+            ex = self._get_exchange()
+            orders = ex.fetch_open_orders(symbol)
+            for o in orders:
+                if o.get("reduceOnly") and "stop" in str(o.get("type", "")).lower():
+                    return True
+            return False
+        except Exception:
+            return False
 
-        Kraken Futures: stop-loss order type = "stop"
+    def set_stop_loss(self, symbol: str, side: str, stop_price: float,
+                      amount: Optional[float] = None) -> bool:
+        """
+        Setzt Stop-Loss via Stop-Market-Order mit reduceOnly.
+        Entfernt vorherigen SL falls vorhanden.
         """
         if not KRAKEN_KEY:
-            print(f"[Trader] DRY RUN: Stop-Loss {symbol} {side} @ {stop_price}")
+            print(f"[Trader] DRY RUN: SL {symbol} {side} @ {stop_price}")
             return True
 
         try:
             ex = self._get_exchange()
+            ex.load_markets()
 
-            if side == "long":
-                # Long SL: sell stop unter Entry
-                params = {
-                    "stopPrice": stop_price,
-                    "triggerPrice": stop_price,
-                }
-                order = ex.create_order(
-                    symbol, "stop", "sell", amount or 0,
-                    stop_price, params,
-                )
-            else:
-                # Short SL: buy stop über Entry
-                params = {
-                    "stopPrice": stop_price,
-                    "triggerPrice": stop_price,
-                }
-                order = ex.create_order(
-                    symbol, "stop", "buy", amount or 0,
-                    stop_price, params,
-                )
+            # Round to market price precision
+            market = ex.market(symbol)
+            price_precision = market.get("precision", {}).get("price", 0.0001)
+            ndigits = abs(int(f"{price_precision:.10f}".split("e-")[-1])) if "e-" in f"{price_precision:.10f}" else len(str(price_precision).split(".")[-1]) if "." in str(price_precision) else 4
+            sl_rounded = round(stop_price, ndigits)
 
-            print(f"[Trader] Stop-Loss gesetzt: {symbol} {side} @ {stop_price:.6f}")
+            # Cancel existing SL orders
+            try:
+                open_orders = ex.fetch_open_orders(symbol)
+                for o in open_orders:
+                    if o.get("reduceOnly") and "stop" in str(o.get("type", "")).lower():
+                        ex.cancel_order(o["id"], symbol)
+                        print(f"[Trader] Alten SL gecancelled: {o['id']}")
+            except Exception:
+                pass
+
+            # Place new Stop-Market order
+            stop_side = "buy" if side == "short" else "sell"
+
+            # Get position size if not given
+            if amount is None or amount <= 0:
+                positions = ex.fetch_positions([symbol])
+                for p in positions:
+                    c = float(p.get("contracts", 0) or 0)
+                    if c > 0:
+                        amount = c
+                        break
+
+            if not amount or amount <= 0:
+                print(f"[Trader] SL: Keine Position gefunden für {symbol}")
+                return False
+
+            order = ex.create_order(
+                symbol, "stop", stop_side, amount, sl_rounded,
+                {"stopPrice": sl_rounded, "reduceOnly": True}
+            )
+            print(f"[Trader] SL gesetzt: {symbol} {side} {amount} @ {sl_rounded:.6f} | ID: {order.get('id')}")
             return True
 
         except Exception as e:
-            print(f"[Trader] Stop-Loss ERROR: {e}")
+            print(f"[Trader] SL ERROR: {e}")
             return False
+
+    def get_stop_loss_price(self, symbol: str) -> Optional[float]:
+        """Liest aktuellen SL-Preis aus offenen Orders."""
+        try:
+            ex = self._get_exchange()
+            orders = ex.fetch_open_orders(symbol)
+            for o in orders:
+                if o.get("reduceOnly") and "stop" in str(o.get("type", "")).lower():
+                    return float(o.get("price", 0) or o.get("stopPrice", 0) or 0)
+            return None
+        except Exception:
+            return None
 
     # ─── Close Position ────────────────────────────────────────
 
-    def close_position(
-        self,
-        symbol: str,
-        side: str,
-        amount: Optional[float] = None,
-        close_pct: float = 1.0,  # 1.0 = 100%, 0.5 = 50%
-    ) -> TradeResult:
-        """
-        Schließt eine Position (teilweise oder ganz).
-
-        Args:
-            symbol: CCXT Symbol
-            side: "long" oder "short"
-            amount: Menge (None = gesamte Position)
-            close_pct: Anteil zum Schließen (0.5 = 50%)
-        """
+    def close_position(self, symbol: str, side: str,
+                       amount: Optional[float] = None,
+                       close_pct: float = 1.0) -> TradeResult:
+        """Schließt Position (teilweise/ganz). Cancelt SL vorher."""
         if not KRAKEN_KEY:
-            return TradeResult(
-                success=False, symbol=symbol, side=side,
-                order_id="", price=0, size=0, cost=0, stop_loss=0,
-                step=0, message="DRY RUN — keine Live-Order",
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
+            return TradeResult(False, symbol, side, "", 0, 0, 0, 0, 0,
+                             "DRY RUN", datetime.now(timezone.utc).isoformat())
 
         try:
             ex = self._get_exchange()
+            ex.load_markets()
 
-            # Position aus fetch_positions holen
+            # Cancel all orders (SL)
+            try:
+                ex.cancel_all_orders(symbol)
+            except Exception:
+                pass
+
+            # Get position
             positions = ex.fetch_positions([symbol])
             pos = None
             for p in positions:
@@ -394,76 +321,36 @@ class KrakenTrader:
                     break
 
             if pos is None:
-                return TradeResult(
-                    success=False, symbol=symbol, side=side,
-                    order_id="", price=0, size=0, cost=0, stop_loss=0,
-                    step=0, message="Keine offene Position gefunden",
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                )
+                return TradeResult(False, symbol, side, "", 0, 0, 0, 0, 0,
+                                 "Keine Position", datetime.now(timezone.utc).isoformat())
 
-            total_contracts = float(pos.get("contracts", 0))
-            close_contracts = total_contracts * close_pct
+            total = float(pos.get("contracts", 0))
+            close_size = total * close_pct
 
-            # Runden
-            market = ex.market(symbol)
-            precision = market.get("precision", {}).get("amount", 8)
-            close_contracts = round(close_contracts, precision)
-
-            if close_contracts <= 0:
-                return TradeResult(
-                    success=False, symbol=symbol, side=side,
-                    order_id="", price=0, size=0, cost=0, stop_loss=0,
-                    step=0, message="Close amount ≤ 0",
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                )
-
-            # Market close
             if side == "long":
-                order = ex.create_market_sell_order(symbol, close_contracts, {
-                    "reduceOnly": True,
-                })
+                order = ex.create_market_sell_order(symbol, close_size, {"reduceOnly": True})
             else:
-                order = ex.create_market_buy_order(symbol, close_contracts, {
-                    "reduceOnly": True,
-                })
+                order = ex.create_market_buy_order(symbol, close_size, {"reduceOnly": True})
 
             avg_price = float(order.get("average", order.get("price", 0)) or 0)
-            cost = float(order.get("cost", 0) or 0)
+            print(f"[Trader] Close {int(close_pct*100)}% {symbol}: {close_size} @ {avg_price:.6f}")
 
-            pct_text = f"{int(close_pct * 100)}%"
-            print(f"[Trader] Close {pct_text}: {symbol} {side} "
-                  f"{close_contracts} @ ~{avg_price:.6f}")
-
-            return TradeResult(
-                success=True, symbol=symbol, side=side,
-                order_id=str(order.get("id", "")),
-                price=avg_price, size=close_contracts, cost=cost,
-                stop_loss=0, step=0,
-                message=f"Closed {pct_text} of {symbol}",
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
+            return TradeResult(True, symbol, side, str(order.get("id", "")),
+                             avg_price, close_size, float(order.get("cost", 0) or 0), 0, 0,
+                             f"Closed {int(close_pct*100)}%", datetime.now(timezone.utc).isoformat())
 
         except Exception as e:
             print(f"[Trader] Close ERROR: {e}")
-            return TradeResult(
-                success=False, symbol=symbol, side=side,
-                order_id="", price=0, size=0, cost=0, stop_loss=0,
-                step=0, message=str(e),
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-
-    # ─── Convenience ───────────────────────────────────────────
+            return TradeResult(False, symbol, side, "", 0, 0, 0, 0, 0,
+                             str(e), datetime.now(timezone.utc).isoformat())
 
     def has_api_keys(self) -> bool:
-        """Prüft ob API Keys konfiguriert sind."""
         return bool(KRAKEN_KEY and KRAKEN_SECRET)
 
     def get_open_positions(self) -> list:
-        """Listet alle offenen Positionen."""
         if not self.has_api_keys():
             return []
         try:
-            ex = self._get_exchange()
-            return ex.fetch_positions()
+            return self._get_exchange().fetch_positions()
         except Exception:
             return []
