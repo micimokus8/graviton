@@ -44,29 +44,22 @@ class BiasResult:
 # ═══════════════════════════════════════════════════════════════════
 
 def _rsi(close: np.ndarray, period: int = 14) -> float:
-    """Berechnet RSI für numpy array, gibt letzten Wert."""
+    """Wilder's RSI (EMA-Smoothing, nicht simple average)."""
     if len(close) < period + 1:
         return 50.0
     delta = np.diff(close)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_gain = np.mean(gain[-period:])
-    avg_loss = np.mean(loss[-period:])
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+    # Erste avg = simple mean über ersten 'period' Bars
+    avg_gain = np.mean(gain[:period])
+    avg_loss = np.mean(loss[:period])
+    # Wilder's smoothing für den Rest
+    for i in range(period, len(gain)):
+        avg_gain = (avg_gain * (period - 1) + gain[i]) / period
+        avg_loss = (avg_loss * (period - 1) + loss[i]) / period
     if avg_loss == 0:
         return 100.0
-    rs = avg_gain / avg_loss
-    return 100.0 - (100.0 / (1.0 + rs))
-
-
-def _ema(close: np.ndarray, period: int = 20) -> float:
-    """Einfache EMA via pandas-style oder manuell."""
-    if len(close) < period:
-        return float(close[-1]) if len(close) > 0 else 0.0
-    alpha = 2.0 / (period + 1)
-    ema = close[0]
-    for val in close[1:]:
-        ema = alpha * val + (1 - alpha) * ema
-    return float(ema)
+    return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
 
 
 # ═══════════════════════════════════════════════════════════════════
