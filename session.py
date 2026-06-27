@@ -169,6 +169,9 @@ def main():
                 entry_price = signal.entry_price
                 stop_loss = signal.stop_loss
 
+                # Track step in engine
+                entry_engine.increment_step(symbol)
+
                 # LIVE: execute trade
                 if not DRY_RUN:
                     from trader import KrakenTrader
@@ -299,6 +302,7 @@ def main():
     tg(f"✅ [{name}] Session Ende — {_ts_str()}")
 
     ENTRY_STATE_FILE.unlink(missing_ok=True)
+    entry_engine.reset_all()
 
 
 if __name__ == "__main__":

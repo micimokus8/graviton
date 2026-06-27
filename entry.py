@@ -26,7 +26,6 @@ Entry-Logik:
 from __future__ import annotations
 import ccxt
 import numpy as np
-import time as _time
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -151,9 +150,9 @@ class EntryEngine:
             high_dist = (high - ema) / ema * 100
             if high_dist > 0.3:
                 return False
-            # Body signifikant vs untere Wick
-            lower_wick = close - low
-            return body > lower_wick * 0.5
+            # Body dominant vs upper wick (Rejection nach unten)
+            upper_wick = high - max(open, close)
+            return body > upper_wick * 0.5
 
         return False
 
@@ -225,47 +224,48 @@ class EntryEngine:
         )
 
         # Entfernt von EMA → warten
-        if distance_pct > max_dist:
+        if distance_pct > max_dist * 3:
             signal.state = EntryState.WAITING
             return signal
 
-        # Nahe EMA → APPROACHING
-        signal.state = EntryState.APPROACHING
+        # Annähernd an EMA → APPROACHING
+        if distance_pct > max_dist:
+            signal.state = EntryState.APPROACHING
+            return signal
 
-        # Prüfe ob Preis wirklich an der EMA ist (AT_EMA)
-        if distance_pct <= max_dist:
-            signal.state = EntryState.AT_EMA
+        # Preis an der EMA → AT_EMA + Rejection-Prüfung
+        signal.state = EntryState.AT_EMA
 
-            # Rejection-Prüfung auf letzter Kerze
-            last_open  = float(opens[-1])
-            last_high  = float(highs[-1])
-            last_low   = float(lows[-1])
-            last_close = float(closes[-1])
+        # Rejection-Prüfung auf letzter Kerze
+        last_open  = float(opens[-1])
+        last_high  = float(highs[-1])
+        last_low   = float(lows[-1])
+        last_close = float(closes[-1])
 
-            is_rejection = self._is_rejection_candle(
-                last_open, last_high, last_low, last_close,
-                current_ema, bias,
-            )
+        is_rejection = self._is_rejection_candle(
+            last_open, last_high, last_low, last_close,
+            current_ema, bias,
+        )
 
-            if is_rejection:
-                signal.state = EntryState.REJECTION
-                signal.rejection = True
-                signal.rejection_high = last_high
-                signal.rejection_low = last_low
-                signal.rejection_close = last_close
+        if is_rejection:
+            signal.state = EntryState.REJECTION
+            signal.rejection = True
+            signal.rejection_high = last_high
+            signal.rejection_low = last_low
+            signal.rejection_close = last_close
 
-                # Entry-Preis = Market (aktueller Close)
-                signal.entry_price = last_close
+            # Entry-Preis = Market (aktueller Close)
+            signal.entry_price = last_close
 
-                # Stop Loss
-                if bias == "LONG":
-                    # SL = Low der Rejection-Kerze - offset%
-                    signal.stop_loss = round(last_low * (1 - sl_offset / 100), 6)
-                else:  # SHORT
-                    # SL = High der Rejection-Kerze + offset%
-                    signal.stop_loss = round(last_high * (1 + sl_offset / 100), 6)
+            # Stop Loss
+            if bias == "LONG":
+                # SL = Low der Rejection-Kerze - offset%
+                signal.stop_loss = round(last_low * (1 - sl_offset / 100), 6)
+            else:  # SHORT
+                # SL = High der Rejection-Kerze + offset%
+                signal.stop_loss = round(last_high * (1 + sl_offset / 100), 6)
 
-                signal.state = EntryState.ENTERED
+            signal.state = EntryState.ENTERED
 
         return signal
 
@@ -287,36 +287,3 @@ class EntryEngine:
     def reset_all(self):
         """Alle Coins zurücksetzen."""
         self._active_positions.clear()
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Convenience
-# ═══════════════════════════════════════════════════════════════════
-
-def wait_for_entry(
-    symbol: str,
-    bias: str,
-    timeout_seconds: int = 3600,
-    poll_interval: int = 10,
-) -> Optional[EntrySignal]:
-    """
-    Polled auf Entry-Signal mit Timeout.
-    Blockiert bis Entry gefunden oder Timeout.
-    """
-    engine = EntryEngine()
-    step = engine.get_step(symbol) + 1
-    deadline = _time.time() + timeout_seconds
-
-    print(f"[Entry] Warte auf Pullback für {symbol} ({bias}, Step {step})...")
-
-    while _time.time() < deadline:
-        signal = engine.check_entry(symbol, bias, step)
-        if signal.state == EntryState.ENTERED:
-            print(f"[Entry] SIGNAL! {symbol} {bias} @ {signal.entry_price:.6f}")
-            return signal
-        if signal.state == EntryState.AT_EMA:
-            print(f"[Entry] {symbol} an EMA20 ({signal.distance_pct:.2f}%), warte auf Rejection...")
-        _time.sleep(poll_interval)
-
-    print(f"[Entry] Timeout für {symbol}")
-    return None
