@@ -150,6 +150,7 @@ def main():
     entry_price = 0.0
     stop_loss = 0.0
     last_ema_msg_time = 0
+    last_far_msg_time = 0   # throttle "weit von EMA" Meldung
 
     while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
         try:
@@ -199,6 +200,14 @@ def main():
                     print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
                     tg(f"⏳ [{name}] {base} an EMA20 ({signal.distance_pct:.2f}%) — warte auf Pullback")
                     last_ema_msg_time = now_sec
+
+            elif signal.state in (EntryState.WAITING, EntryState.APPROACHING):
+                now_sec = time.time()
+                if now_sec - last_far_msg_time > 600:  # alle 10 Min
+                    state_label = "weit entfernt" if signal.state == EntryState.WAITING else "nähert sich"
+                    print(f"  [{_ts_str()}] {base}: {signal.distance_pct:.2f}% von EMA ({state_label})...")
+                    tg(f"⏳ [{name}] {base}: {signal.distance_pct:.2f}% von EMA20 — {state_label}")
+                    last_far_msg_time = now_sec
 
         except Exception as e:
             print(f"  Entry-Fehler: {e}")
