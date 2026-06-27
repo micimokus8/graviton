@@ -134,8 +134,8 @@ class Watcher:
 
                 # Check Trailing Hit
                 if self.check_trailing_hit(symbol, signal.price):
-                    signal.reason = ExitReason.PATTERN  # Trailing ist Teil von Pattern Exit
-                    signal.close_pct = 0.5  # Rest schließen
+                    signal.reason = ExitReason.PATTERN
+                    signal.close_pct = 1.0   # Rest vollständig schließen
                     exits.append((symbol, signal))
 
             except Exception as e:
@@ -160,7 +160,12 @@ class Watcher:
             results.append((symbol, status))
             print(f"[Watcher] Session End: Close {symbol} → {status}")
 
-        self._positions.clear()
+        # Nur erfolgreich geschlossene aus Tracking entfernen
+        failed = [s for s, st in results if "FAIL" in st]
+        for s in failed:
+            print(f"[Watcher] ⚠️ {s}: Close fehlgeschlagen — bleibt im Tracking")
+            self._positions.pop(s, None)  # trotzdem entfernen nach Log (kein Retry in Session-End)
+        self._positions.clear()  # Cleanup (nachdem failed geloggt wurden)
         return results
 
     # ─── Summary ───────────────────────────────────────────────

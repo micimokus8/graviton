@@ -174,8 +174,9 @@ class ExitEngine:
                       round(dist, 2), round(rsi_val, 1),
                       msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
 
-        # Kein Exit
-        return ns
+        # Kein Exit — price muss aktuellen Preis enthalten!
+        return sig(symbol, side, ExitReason.NONE, 0, price, ema20,
+                  round(dist, 2), round(rsi_val, 1), msg="Kein Signal")
 
     def _which_pattern(self, opens, highs, lows, closes, side: str) -> str:
         from patterns import detect_exit_pattern_talib, HAS_TALIB
