@@ -65,13 +65,17 @@ class ExitEngine:
         return np.array(candles, dtype=float)
 
     def _rsi(self, close: np.ndarray, period: int = 14) -> float:
+        """Wilder's RSI (EMA-Smoothing)."""
         if len(close) < period + 1:
             return 50.0
         delta = np.diff(close)
-        gain = np.where(delta > 0, delta, 0)
-        loss = np.where(delta < 0, -delta, 0)
-        avg_gain = np.mean(gain[-period:])
-        avg_loss = np.mean(loss[-period:])
+        gain = np.where(delta > 0, delta, 0.0)
+        loss = np.where(delta < 0, -delta, 0.0)
+        avg_gain = np.mean(gain[:period])
+        avg_loss = np.mean(loss[:period])
+        for i in range(period, len(gain)):
+            avg_gain = (avg_gain * (period - 1) + gain[i]) / period
+            avg_loss = (avg_loss * (period - 1) + loss[i]) / period
         if avg_loss == 0:
             return 100.0
         return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
@@ -102,7 +106,15 @@ class ExitEngine:
         opens  = data[:, 1]
 
         price = float(closes[-1])
-        ema20 = float(np.mean(closes[-20:])) if len(closes) >= 20 else price
+        # EMA(20): gewichtet neuere Werte stärker
+        if len(closes) >= 20:
+            alpha = 2.0 / 21
+            ema = closes[0]
+            for v in closes[1:]:
+                ema = alpha * v + (1 - alpha) * ema
+            ema20 = float(ema)
+        else:
+            ema20 = price
         dist = abs(price - ema20) / ema20 * 100
         rsi_val = self._rsi(closes)
 
@@ -169,6 +181,7 @@ class ExitEngine:
         from patterns import detect_exit_pattern_talib, HAS_TALIB
         if not HAS_TALIB:
             return "Candlestick"
+        import talib  # noqa — muss VOR pairs kommen, Dict wird sofort evaluiert
 
         o = np.asarray(opens, dtype=float)
         h = np.asarray(highs, dtype=float)
@@ -189,7 +202,6 @@ class ExitEngine:
                 ("Piercing", talib.CDLPIERCING(o, h, l, c)[-1] > 0),
             ],
         }
-        import talib  # noqa
         for name, hit in pairs.get(side, []):
             if hit:
                 return name
