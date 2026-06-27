@@ -161,6 +161,19 @@ def main():
                 entry_price = signal.entry_price
                 stop_loss = signal.stop_loss
 
+                # LIVE: execute trade
+                if not DRY_RUN:
+                    from trader import KrakenTrader
+                    trader = KrakenTrader()
+                    fill = trader.open_position(symbol, bias.lower())
+                    if fill.success:
+                        trader.set_stop_loss(symbol, bias.lower(), stop_loss, fill.size)
+                        entry_price = fill.price
+                        print(f"  → LIVE {bias} {base} @ {fill.price:.6f} | SL: {stop_loss:.6f}")
+                    else:
+                        print(f"  → LIVE ERROR: {fill.message}")
+                        entered = False
+
                 with open(ENTRY_STATE_FILE, "w") as f:
                     json.dump({
                         "entered": True, "symbol": symbol, "bias": bias,
