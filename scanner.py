@@ -226,12 +226,12 @@ def run_scan() -> List[ScanResult]:
         print("  Keine Coins gefunden die den Filter passen.")
         return results
 
-    print(f"  {'Coin':<10} {'Change':>8} {'Price':>10} {'Vol(€)':>14} {'Bid':>10} {'Ask':>10}")
+    print(f"  {'Coin':<10} {'Change':>8} {'Price':>10} {'Vol($)':>14} {'Bid':>10} {'Ask':>10}")
     print(f"  {'─'*10} {'─'*8} {'─'*10} {'─'*14} {'─'*10} {'─'*10}")
     for r in results:
         arrow = "▲" if r.change_24h_pct > 0 else "▼"
         print(f"  {r.base:<10} {arrow}{abs(r.change_24h_pct):>7.2f}% "
-              f"${r.price:>9.4f} €{r.volume_24h_eur:>13,.0f} "
+              f"${r.price:>9.4f} ${r.volume_24h_usd:>13,.0f} "
               f"${r.bid:>9.4f} ${r.ask:>9.4f}")
     print(f"{'═'*70}")
     return results

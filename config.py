@@ -87,9 +87,9 @@ SR = {
 # ─── Position Sizing ───────────────────────────────────────────────
 
 POSITION = {
-    "account_risk_pct_per_coin":  15.0,
-    "steps_distribution":         "equal",   # 15%/4 = 3.75% pro Stufe
-    "max_total_exposure_pct":     30.0,
+    "account_risk_pct_per_coin":  17.5,   # ~100 USD bei 570 USD Equity
+    "steps_distribution":         "equal",
+    "max_total_exposure_pct":     35.0,
 }
 
 # ─── Exit ──────────────────────────────────────────────────────────
