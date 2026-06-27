@@ -212,6 +212,16 @@ class KrakenTrader:
             print(f"[Trader] Konnte Kontraktgröße nicht berechnen: {e}")
             return 0
 
+    def set_leverage(self, symbol: str, leverage: int = 1) -> bool:
+        """Setzt Leverage für Symbol (Default: 1x)."""
+        try:
+            ex = self._get_exchange()
+            ex.set_leverage(leverage, symbol)
+            return True
+        except Exception as e:
+            print(f"[Trader] Leverage-Set Fehler ({symbol}): {e}")
+            return False
+
     # ─── Entry Order ───────────────────────────────────────────
 
     def enter_position(
@@ -243,6 +253,10 @@ class KrakenTrader:
 
         try:
             ex = self._get_exchange()
+
+            # Set leverage + isolated margin
+            self.set_leverage(symbol, CFG.exchange["leverage"])
+            print(f"[Trader] Leverage: {CFG.exchange['leverage']}x {CFG.exchange['margin']}")
 
             if size_usd is None:
                 size_usd = self.calc_position_size()
