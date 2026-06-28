@@ -162,6 +162,11 @@ def main():
 
     # Iteriere Kandidaten, nimm ersten nicht-geblockten
     # Candidate-Rotation: äußere Loop iteriert Kandidaten
+    entry_engine = EntryEngine()
+    exit_engine = ExitEngine()
+    entered = False
+    entry_price = 0.0
+    stop_loss = 0.0
     candidate_idx = 0
     while candidate_idx < len(candidates) and not entered:
         cand = candidates[candidate_idx]
@@ -183,87 +188,87 @@ def main():
         last_far_msg_time = 0
         btc_block_count = 0
 
-    while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
-        try:
-            signal = entry_engine.check_entry(symbol, bias, current_step=1)
+        while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
+            try:
+                signal = entry_engine.check_entry(symbol, bias, current_step=1)
 
-            if signal.state == EntryState.ENTERED:
-                # ── BTC-Korrelations-Check mit Candidate-Rotation ──
-                btc_trend = _check_btc_1m_trend()
-                btc_blocked = (bias == "LONG" and btc_trend == "down") or \
-                              (bias == "SHORT" and btc_trend == "up")
-                if btc_blocked:
-                    btc_block_count += 1
-                    direction = "bearish" if bias == "LONG" else "bullish"
-                    print(f"  [{_ts_str()}] {base}: BTC 1m {direction} (×{btc_block_count}/3)")
-                    if btc_block_count >= 3:
-                        tg(f"🔄 [{name}] {base}: 3× BTC-Block — Candidate-Rotation")
-                        break
-                    tg(f"⚠️ [{name}] {base}: BTC-Block (×{btc_block_count}/3)")
-                    time.sleep(30)
-                    continue
-                btc_block_count = 0
+                if signal.state == EntryState.ENTERED:
+                    # ── BTC-Korrelations-Check mit Candidate-Rotation ──
+                    btc_trend = _check_btc_1m_trend()
+                    btc_blocked = (bias == "LONG" and btc_trend == "down") or \
+                                  (bias == "SHORT" and btc_trend == "up")
+                    if btc_blocked:
+                        btc_block_count += 1
+                        direction = "bearish" if bias == "LONG" else "bullish"
+                        print(f"  [{_ts_str()}] {base}: BTC 1m {direction} (×{btc_block_count}/3)")
+                        if btc_block_count >= 3:
+                            tg(f"🔄 [{name}] {base}: 3× BTC-Block — Candidate-Rotation")
+                            break
+                        tg(f"⚠️ [{name}] {base}: BTC-Block (×{btc_block_count}/3)")
+                        time.sleep(30)
+                        continue
+                    btc_block_count = 0
 
-                # ── Trade Log: ENTRY ──
-                _log_trade("entry", symbol=symbol, base=base, bias=bias,
-                           price=signal.entry_price, ema20=signal.ema20,
-                           stop_loss=signal.stop_loss, mode=mode, session=name)
-                entry_msg = (
-                    f"🎯 {mode} ENTRY {bias} {base}\n"
-                    f"   Price:  {signal.entry_price:.6f}\n"
-                    f"   EMA20:  {signal.ema20:.6f}\n"
-                    f"   Dist:   {signal.distance_pct:.2f}%\n"
-                    f"   SL:     {signal.stop_loss:.6f}"
-                )
-                print(entry_msg); tg(entry_msg)
+                    # ── Trade Log: ENTRY ──
+                    _log_trade("entry", symbol=symbol, base=base, bias=bias,
+                               price=signal.entry_price, ema20=signal.ema20,
+                               stop_loss=signal.stop_loss, mode=mode, session=name)
+                    entry_msg = (
+                        f"🎯 {mode} ENTRY {bias} {base}\n"
+                        f"   Price:  {signal.entry_price:.6f}\n"
+                        f"   EMA20:  {signal.ema20:.6f}\n"
+                        f"   Dist:   {signal.distance_pct:.2f}%\n"
+                        f"   SL:     {signal.stop_loss:.6f}"
+                    )
+                    print(entry_msg); tg(entry_msg)
 
-                entered = True
-                entry_price = signal.entry_price
-                stop_loss = signal.stop_loss
+                    entered = True
+                    entry_price = signal.entry_price
+                    stop_loss = signal.stop_loss
 
-                # Track step in engine
-                entry_engine.increment_step(symbol)
+                    # Track step in engine
+                    entry_engine.increment_step(symbol)
 
-                # LIVE: execute trade
-                if not DRY_RUN:
-                    from trader import KrakenTrader
-                    trader = KrakenTrader()
-                    fill = trader.open_position(symbol, bias.lower())
-                    if fill.success:
-                        trader.set_stop_loss(symbol, bias.lower(), stop_loss, fill.size)
-                        entry_price = fill.price
-                        print(f"  → LIVE {bias} {base} @ {fill.price:.6f} | SL: {stop_loss:.6f}")
-                    else:
-                        print(f"  → LIVE ERROR: {fill.message}")
-                        entered = False
+                    # LIVE: execute trade
+                    if not DRY_RUN:
+                        from trader import KrakenTrader
+                        trader = KrakenTrader()
+                        fill = trader.open_position(symbol, bias.lower())
+                        if fill.success:
+                            trader.set_stop_loss(symbol, bias.lower(), stop_loss, fill.size)
+                            entry_price = fill.price
+                            print(f"  → LIVE {bias} {base} @ {fill.price:.6f} | SL: {stop_loss:.6f}")
+                        else:
+                            print(f"  → LIVE ERROR: {fill.message}")
+                            entered = False
 
-                with open(ENTRY_STATE_FILE, "w") as f:
-                    json.dump({
-                        "entered": entered, "symbol": symbol, "bias": bias,
-                        "entry": entry_price, "sl": stop_loss,
-                        "time": datetime.now(timezone.utc).isoformat(),
-                    }, f, indent=2)
-                break
+                    with open(ENTRY_STATE_FILE, "w") as f:
+                        json.dump({
+                            "entered": entered, "symbol": symbol, "bias": bias,
+                            "entry": entry_price, "sl": stop_loss,
+                            "time": datetime.now(timezone.utc).isoformat(),
+                        }, f, indent=2)
+                    break
 
-            elif signal.state == EntryState.AT_EMA:
-                now_sec = time.time()
-                if now_sec - last_ema_msg_time > 300:
-                    print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
-                    tg(f"⏳ [{name}] {base} an EMA20 ({signal.distance_pct:.2f}%) — warte auf Pullback")
-                    last_ema_msg_time = now_sec
+                elif signal.state == EntryState.AT_EMA:
+                    now_sec = time.time()
+                    if now_sec - last_ema_msg_time > 300:
+                        print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
+                        tg(f"⏳ [{name}] {base} an EMA20 ({signal.distance_pct:.2f}%) — warte auf Pullback")
+                        last_ema_msg_time = now_sec
 
-            elif signal.state in (EntryState.WAITING, EntryState.APPROACHING):
-                now_sec = time.time()
-                if now_sec - last_far_msg_time > 600:  # alle 10 Min
-                    state_label = "weit entfernt" if signal.state == EntryState.WAITING else "nähert sich"
-                    print(f"  [{_ts_str()}] {base}: {signal.distance_pct:.2f}% von EMA ({state_label})...")
-                    tg(f"⏳ [{name}] {base}: {signal.distance_pct:.2f}% von EMA20 — {state_label}")
-                    last_far_msg_time = now_sec
+                elif signal.state in (EntryState.WAITING, EntryState.APPROACHING):
+                    now_sec = time.time()
+                    if now_sec - last_far_msg_time > 600:  # alle 10 Min
+                        state_label = "weit entfernt" if signal.state == EntryState.WAITING else "nähert sich"
+                        print(f"  [{_ts_str()}] {base}: {signal.distance_pct:.2f}% von EMA ({state_label})...")
+                        tg(f"⏳ [{name}] {base}: {signal.distance_pct:.2f}% von EMA20 — {state_label}")
+                        last_far_msg_time = now_sec
 
-        except Exception as e:
-            print(f"  Entry-Fehler: {e}")
+            except Exception as e:
+                print(f"  Entry-Fehler: {e}")
 
-        time.sleep(30)
+            time.sleep(30)
 
         # Inner loop end → nächster Kandidat
         candidate_idx += 1
