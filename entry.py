@@ -198,10 +198,9 @@ class EntryEngine:
         lows    = data[:, 3]
         opens   = data[:, 1]
 
-        # EMA20 + Smoothing
+        # EMA20 (KEIN Smoothing auf 1m — doppelte Glättung erzeugt zu viel Lag)
         ema_raw = self._calc_ema(closes, ema_period)
-        ema = self._smooth_ema(ema_raw, smoothing)
-        current_ema = float(ema[-1])
+        current_ema = float(ema_raw[-1])
         current_price = float(closes[-1])
 
         # Distanz zur EMA

@@ -120,7 +120,7 @@ class BiasAnalyzer:
         rsi_short_min = cfg["rsi_short_min"]
 
         # Fetch 15m candles
-        data = self._fetch_ohlcv(symbol, timeframe="15m", limit=30)
+        data = self._fetch_ohlcv(symbol, timeframe="15m", limit=60)
 
         timestamps = data[:, 0].astype(int)
         opens   = data[:, 1]

@@ -118,7 +118,19 @@ class ExitEngine:
         dist = abs(price - ema20) / ema20 * 100
         rsi_val = self._rsi(closes)
 
-        # ─── Stufe 1: Pattern (50%) ────────────────────────────
+        # ─── Stufe 1: STOP-LOSS (absolut erste Priorität) ──────────
+
+        # B0: Stop-Loss — MUSS vor Pattern-Check kommen
+        if side == "long" and price <= stop_loss:
+            return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
+                      round(dist, 2), round(rsi_val, 1),
+                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
+        elif side == "short" and price >= stop_loss:
+            return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
+                      round(dist, 2), round(rsi_val, 1),
+                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
+
+        # ─── Stufe 2: Pattern (50%) ────────────────────────────
 
         pattern = detect_exit_pattern(opens, highs, lows, closes, side.upper())
         if pattern and cfg_exit["pattern_exit_50"]:
@@ -127,7 +139,7 @@ class ExitEngine:
                       round(rsi_val, 1), True, True,
                       f"[PATTERN] {pname} → 50% schließen + SL auf Break-Even")
 
-        # ─── Stufe 2: Strukturell (100%) ───────────────────────
+        # ─── Stufe 3: Strukturell (100%) ───────────────────────
 
         # B1: EMA overextended
         if dist > cfg_exit["ema_overextended_pct"]:
@@ -135,8 +147,8 @@ class ExitEngine:
                       round(dist, 2), round(rsi_val, 1),
                       msg=f"[STRUKTURELL] EMA {dist:.1f}% entfernt → 100%")
 
-        # B2: RSI extrem (ab Step 4)
-        if current_step >= 4:
+        # B2: RSI extrem (ab Step 2, nicht 4 — max_stair_steps=1 würde 4 nie erreichen)
+        if current_step >= 2:
             if side == "long" and rsi_val > cfg_exit["rsi_extreme_long"]:
                 return sig(symbol, side, ExitReason.RSI_EXTREME, 1.0, price, ema20,
                           round(dist, 2), round(rsi_val, 1),
@@ -163,16 +175,6 @@ class ExitEngine:
                               msg=f"[STRUKTURELL] Support {sup:.4f} erreicht → 100%")
         except Exception:
             pass
-
-        # B4: Stop-Loss
-        if side == "long" and price <= stop_loss:
-            return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
-                      round(dist, 2), round(rsi_val, 1),
-                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
-        elif side == "short" and price >= stop_loss:
-            return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
-                      round(dist, 2), round(rsi_val, 1),
-                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
 
         # Kein Exit — price muss aktuellen Preis enthalten!
         return sig(symbol, side, ExitReason.NONE, 0, price, ema20,

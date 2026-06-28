@@ -30,18 +30,36 @@ class SRLevels:
     weekly_low: float
     daily_high: float    # Vortag
     daily_low: float
+    intraday_high: float  # Heute Session High (letzte 3 Tage)
+    intraday_low: float   # Heute Session Low
+    day3_high: float      # Vor-3-Tage High
+    day3_low: float       # Vor-3-Tage Low
+
+    def _all_resistances(self, price: float) -> List[float]:
+        """Alle Resistance-Levels über Preis."""
+        candidates = [
+            self.weekly_high, self.daily_high,
+            self.intraday_high, self.day3_high,
+        ]
+        return sorted([l for l in candidates if l > price])
+
+    def _all_supports(self, price: float) -> List[float]:
+        """Alle Support-Levels unter Preis."""
+        candidates = [
+            self.weekly_low, self.daily_low,
+            self.intraday_low, self.day3_low,
+        ]
+        return sorted([l for l in candidates if l < price], reverse=True)
 
     def nearest_resistance(self, price: float) -> Optional[float]:
-        """Nächste Resistance über dem Preis."""
-        levels = [self.weekly_high, self.daily_high]
-        above = [l for l in levels if l > price]
-        return min(above) if above else None
+        """Nächste Resistance über dem Preis (mit Confluence-Info)."""
+        above = self._all_resistances(price)
+        return above[0] if above else None
 
     def nearest_support(self, price: float) -> Optional[float]:
-        """Nächster Support unter dem Preis."""
-        levels = [self.weekly_low, self.daily_low]
-        below = [l for l in levels if l < price]
-        return max(below) if below else None
+        """Nächster Support unter dem Preis (mit Confluence-Info)."""
+        below = self._all_supports(price)
+        return below[0] if below else None
 
     def is_sr_too_close(self, price: float, bias: str) -> tuple[bool, str]:
         """
@@ -110,17 +128,29 @@ class SRCalculator:
         except Exception:
             weekly_high = weekly_low = 0.0
 
-        # Daily candles (Vortag)
+        # Daily candles (letzte 5 Tage für intraday + 3-Tage-Kontext)
         try:
-            daily = ex.fetch_ohlcv(symbol, timeframe="1d", limit=3)
-            if daily and len(daily) >= 2:
+            daily = ex.fetch_ohlcv(symbol, timeframe="1d", limit=6)
+            if daily and len(daily) >= 5:
+                prev_day = daily[-2]   # Vortag
+                day3     = daily[-4]   # Vor-3-Tage
+                daily_high = float(prev_day[2])
+                daily_low  = float(prev_day[3])
+                day3_high  = float(day3[2])
+                day3_low   = float(day3[3])
+                # Intraday: höchste High / tiefste Low der letzten 3 Tage
+                recent = daily[-4:-1]  # letzte 3 abgeschlossene Tage
+                intraday_high = max(float(c[2]) for c in recent)
+                intraday_low  = min(float(c[3]) for c in recent)
+            elif daily and len(daily) >= 2:
                 prev_day = daily[-2]
                 daily_high = float(prev_day[2])
                 daily_low  = float(prev_day[3])
+                day3_high = day3_low = intraday_high = intraday_low = 0.0
             else:
-                daily_high = daily_low = 0.0
+                daily_high = daily_low = day3_high = day3_low = intraday_high = intraday_low = 0.0
         except Exception:
-            daily_high = daily_low = 0.0
+            daily_high = daily_low = day3_high = day3_low = intraday_high = intraday_low = 0.0
 
         return SRLevels(
             symbol=symbol,
@@ -128,6 +158,10 @@ class SRCalculator:
             weekly_low=round(weekly_low, 6),
             daily_high=round(daily_high, 6),
             daily_low=round(daily_low, 6),
+            intraday_high=round(intraday_high, 6),
+            intraday_low=round(intraday_low, 6),
+            day3_high=round(day3_high, 6),
+            day3_low=round(day3_low, 6),
         )
 
 

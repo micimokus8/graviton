@@ -103,9 +103,19 @@ def detect_exit_pattern_pure(
         return False
 
     if bias == "LONG":
-        # Shooting Star: small body, long upper wick, small lower wick
-        if upper_wick > body * 2 and lower_wick < body * 0.5:
-            return True
+        # Shooting Star: braucht Kontext — vorheriger Aufwärtsimpuls
+        # Body muss oben liegen (Close nahe Low), mindestens 2 Kerzen Kontext
+        is_shooting_star = (
+            upper_wick > body * 2 and
+            lower_wick < body * 0.5 and
+            body > 0  # kein Doji
+        )
+        if is_shooting_star and len(c) >= 3:
+            # Kontext-Check: vorherige Kerze sollte bullisch sein (Aufwärtsimpuls)
+            if c[-2] > c[-3] and c[-2] > o[-2]:
+                # Close nahe Low = Body liegt oben → Shooting Star bestätigt
+                if last_c < (last_o + last_h) / 2:
+                    return True
         # Bearish Engulfing: red body > previous green body
         if len(o) >= 2:
             prev_body = c[-2] - o[-2]

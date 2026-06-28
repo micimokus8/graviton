@@ -87,10 +87,15 @@ SR = {
 
 # ─── Position Sizing ───────────────────────────────────────────────
 
+EQUITY_USD = _env_float("EQUITY_USD", 200.0)
+
 POSITION = {
-    "account_risk_pct_per_coin":  17.5,   # ~$100 bei $570 Equity
+    "account_risk_pct_per_coin":  17.5,   # % der Equity pro Coin
     "max_total_exposure_pct":     17.5,   # = 1 Position
 }
+
+# Dynamische Positionsgröße (wird bei Config-Init berechnet)
+_position_size_usd = EQUITY_USD * (POSITION["account_risk_pct_per_coin"] / 100)
 
 # ─── Exit ──────────────────────────────────────────────────────────
 
