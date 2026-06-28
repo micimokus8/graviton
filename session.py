@@ -27,6 +27,15 @@ DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 ENTRY_STATE_FILE = DATA_DIR / "entry_state.json"
+TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
+
+
+def _log_trade(event: str, **kwargs):
+    """Trade-Event in JSONL loggen."""
+    entry = {"timestamp": datetime.now(timezone.utc).isoformat(), "event": event, **kwargs}
+    with open(TRADE_LOG_FILE, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
 
 
 def _now_ts() -> int:
@@ -78,6 +87,8 @@ def main():
     now = datetime.now(timezone.utc)
     open_dt = now.replace(hour=open_h, minute=open_m, second=0, microsecond=0)
     close_dt = now.replace(hour=close_h, minute=close_m, second=0, microsecond=0)
+    if close_dt <= open_dt:
+        close_dt += timedelta(days=1)  # Midnight-Überlauf
 
     # ─── Wait for Open ──────────────────────────────────────────
 
@@ -150,54 +161,53 @@ def main():
     # ─── Phase 2: Entry Polling ──────────────────────────────────
 
     # Iteriere Kandidaten, nimm ersten nicht-geblockten
-    entry_candidate = None
-    for cand in candidates:
+    # Candidate-Rotation: äußere Loop iteriert Kandidaten
+    candidate_idx = 0
+    while candidate_idx < len(candidates) and not entered:
+        cand = candidates[candidate_idx]
         blocked, reason, sr = check_sr_for_entry(cand["symbol"], cand["price"], cand["bias"])
-        if not blocked:
-            entry_candidate = cand
-            break
-        else:
-            print(f"🚫 {cand['base']}: S/R-Block — {reason}")
-            tg(f"🚫 [{name}] {cand['base']}: S/R-Block — {reason}")
+        if blocked:
+            print(f"🚫 {cand["base"]}: S/R-Block — {reason}")
+            tg(f"🚫 [{name}] {cand["base"]}: S/R-Block — {reason}")
+            candidate_idx += 1
+            continue
 
-    if entry_candidate is None:
-        msg = f"⚠️ [{name}] Alle Kandidaten durch S/R geblockt — Session beendet."
+        symbol = cand["symbol"]
+        bias = cand["bias"]
+        base = cand["base"]
+
+        msg = f"👁 [{name}] Entry-Polling {base} ({bias}) — alle 30s"
         print(msg); tg(msg)
-        return
 
-    symbol = entry_candidate["symbol"]
-    bias = entry_candidate["bias"]
-    base = entry_candidate["base"]
-
-    msg = f"👁 [{name}] Entry-Polling {base} ({bias}) — alle 30s"
-    print(msg); tg(msg)
-
-    entry_engine = EntryEngine()
-    exit_engine = ExitEngine()
-    entered = False
-    entry_price = 0.0
-    stop_loss = 0.0
-    last_ema_msg_time = 0
-    last_far_msg_time = 0   # throttle "weit von EMA" Meldung
+        last_ema_msg_time = 0
+        last_far_msg_time = 0
+        btc_block_count = 0
 
     while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
         try:
             signal = entry_engine.check_entry(symbol, bias, current_step=1)
 
             if signal.state == EntryState.ENTERED:
-                # ── BTC-Korrelations-Check: nicht gegen BTC-Mikrotrend traden ──
+                # ── BTC-Korrelations-Check mit Candidate-Rotation ──
                 btc_trend = _check_btc_1m_trend()
-                if bias == "LONG" and btc_trend == "down":
-                    print(f"  [{_ts_str()}] {base}: Entry geblockt — BTC 1m bearish gegen LONG")
-                    tg(f"⚠️ [{name}] {base}: Entry geblockt — BTC 1m bearish")
+                btc_blocked = (bias == "LONG" and btc_trend == "down") or \
+                              (bias == "SHORT" and btc_trend == "up")
+                if btc_blocked:
+                    btc_block_count += 1
+                    direction = "bearish" if bias == "LONG" else "bullish"
+                    print(f"  [{_ts_str()}] {base}: BTC 1m {direction} (×{btc_block_count}/3)")
+                    if btc_block_count >= 3:
+                        tg(f"🔄 [{name}] {base}: 3× BTC-Block — Candidate-Rotation")
+                        break
+                    tg(f"⚠️ [{name}] {base}: BTC-Block (×{btc_block_count}/3)")
                     time.sleep(30)
                     continue
-                if bias == "SHORT" and btc_trend == "up":
-                    print(f"  [{_ts_str()}] {base}: Entry geblockt — BTC 1m bullish gegen SHORT")
-                    tg(f"⚠️ [{name}] {base}: Entry geblockt — BTC 1m bullish")
-                    time.sleep(30)
-                    continue
+                btc_block_count = 0
 
+                # ── Trade Log: ENTRY ──
+                _log_trade("entry", symbol=symbol, base=base, bias=bias,
+                           price=signal.entry_price, ema20=signal.ema20,
+                           stop_loss=signal.stop_loss, mode=mode, session=name)
                 entry_msg = (
                     f"🎯 {mode} ENTRY {bias} {base}\n"
                     f"   Price:  {signal.entry_price:.6f}\n"
@@ -255,7 +265,11 @@ def main():
 
         time.sleep(30)
 
-    # Entry-Loop beendet (Session-Ende ohne Signal)
+        # Inner loop end → nächster Kandidat
+        candidate_idx += 1
+
+    # ─── Nach Entry-Polling ─────────────────────────────────────
+
     if not entered:
         msg = f"⏱ [{name}] {base}: Kein Entry-Signal bis Session-Ende"
         print(msg); tg(msg)
@@ -298,6 +312,10 @@ def main():
                 pct = int(sig.close_pct * 100)
                 pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
                       else ((entry_price - sig.price) / entry_price * 100)
+                # ── Trade Log: EXIT ──
+                _log_trade("exit", symbol=symbol, base=base, bias=bias,
+                           reason=sig.reason.value, close_pct=pct, pnl_pct=round(pnl, 2),
+                           price=sig.price, rsi=sig.rsi, session=name)
 
                 # Stufe 1: Pattern ODER Profit Lock (50% close)
                 if sig.reason in (ExitReason.PATTERN, ExitReason.PROFIT_LOCK):
@@ -388,6 +406,9 @@ def main():
     end_msg = f"📤 {mode} EXIT 100% {bias} {base}\n   Level:  3/3 — session_end\n   Info:   Session-Ende → Zwangsschluss"
 
     if entered:
+        _log_trade("exit", symbol=symbol, base=base, bias=bias,
+                   reason="session_end", close_pct=100, pnl_pct=0,
+                   price=0, rsi=0, session=name)
         print(end_msg); tg(end_msg)
         # Use Watcher's session-end close (mit Cleanup-Logging)
         results = watcher.close_all_session_end()
