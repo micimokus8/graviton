@@ -51,17 +51,14 @@ def _check_btc_1m_trend() -> str:
         if not candles or len(candles) < 6:
             return "neutral"
         closes = np.array([c[4] for c in candles], dtype=float)
-        # EMA5
+        # EMA5 — konsistente Serie über alle 10 Bars
         alpha = 2.0 / 6.0
-        ema = closes[0]
+        emas = [closes[0]]
         for v in closes[1:]:
-            ema = alpha * v + (1 - alpha) * ema
-        ema_prev = closes[-6]
-        for v in closes[-5:-1]:
-            ema_prev = alpha * v + (1 - alpha) * ema_prev
-        if ema > ema_prev * 1.001:
+            emas.append(alpha * v + (1 - alpha) * emas[-1])
+        if emas[-1] > emas[-2] * 1.001:
             return "up"
-        elif ema < ema_prev * 0.999:
+        elif emas[-1] < emas[-2] * 0.999:
             return "down"
         return "neutral"
     except Exception:
@@ -302,8 +299,8 @@ def main():
                 pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
                       else ((entry_price - sig.price) / entry_price * 100)
 
-                # Stufe 1: Pattern (50% close)
-                if sig.reason == ExitReason.PATTERN:
+                # Stufe 1: Pattern ODER Profit Lock (50% close)
+                if sig.reason in (ExitReason.PATTERN, ExitReason.PROFIT_LOCK):
                     level = "1/3"
                     exit_msg = (
                         f"📤 {mode} EXIT {pct}% {bias} {base}\n"

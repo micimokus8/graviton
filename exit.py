@@ -22,6 +22,7 @@ from sr_levels import SRCalculator
 
 class ExitReason(Enum):
     PATTERN = "pattern"                  # 50% close + SL → breakeven
+    PROFIT_LOCK = "profit_lock"          # 50% close + Trailing (1% PnL ohne Pattern)
     EMA_OVEREXTENDED = "ema_overextended"  # 100% close
     SR_REACHED = "sr_reached"            # 100% close
     RSI_EXTREME = "rsi_extreme"          # 100% close
@@ -150,7 +151,7 @@ class ExitEngine:
         pnl_pct = ((price - entry_price) / entry_price * 100) if side == "long" \
                   else ((entry_price - price) / entry_price * 100)
         if pnl_pct >= 1.0 and not trailing_active:
-            return sig(symbol, side, ExitReason.PATTERN, 0.5, price, ema20,
+            return sig(symbol, side, ExitReason.PROFIT_LOCK, 0.5, price, ema20,
                       round(dist, 2), round(rsi_val, 1), False, True,
                       f"[PROFIT LOCK] +{pnl_pct:.1f}% ohne Pattern → 50% + Trailing")
 

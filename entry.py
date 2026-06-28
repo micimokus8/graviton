@@ -249,13 +249,16 @@ class EntryEngine:
 
         if is_rejection:
             # ── Volumen-Confirmation: Rejection ohne Volumen = False Signal ──
-            if len(volumes) >= 12:
-                avg_vol = float(np.mean(volumes[-12:-2]))  # letzte 10 Kerzen vor Rejection
-                rejection_vol = float(volumes[-2])  # letzte GESCHLOSSENE Kerze
-                if rejection_vol < avg_vol * 1.2:  # mind. 20% über Durchschnitt
-                    # Rejection ohne Volumen → zurück auf AT_EMA, warten
-                    signal.state = EntryState.AT_EMA
-                    return signal
+            if len(volumes) < 12:
+                # Zu wenig Daten (Session-Start) → warten statt blind entry
+                signal.state = EntryState.AT_EMA
+                return signal
+            avg_vol = float(np.mean(volumes[-12:-2]))  # letzte 10 Kerzen vor Rejection
+            rejection_vol = float(volumes[-2])  # letzte GESCHLOSSENE Kerze
+            if rejection_vol < avg_vol * 1.2:  # mind. 20% über Durchschnitt
+                # Rejection ohne Volumen → zurück auf AT_EMA, warten
+                signal.state = EntryState.AT_EMA
+                return signal
 
             signal.state = EntryState.REJECTION
             signal.rejection = True
