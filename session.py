@@ -37,6 +37,37 @@ def _ts_str() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M UTC")
 
 
+def _check_btc_1m_trend() -> str:
+    """
+    BTC 1m Mikrotrend für Entry-Filter.
+    Nutzt EMA5 auf letzten 5 1m-Kerzen von BTC/USD:USD.
+    Returns "up" (steigend), "down" (fallend), oder "neutral".
+    """
+    import ccxt
+    import numpy as np
+    try:
+        ex = ccxt.krakenfutures({"enableRateLimit": True, "options": {"defaultType": "swap"}})
+        candles = ex.fetch_ohlcv("BTC/USD:USD", timeframe="1m", limit=10)
+        if not candles or len(candles) < 6:
+            return "neutral"
+        closes = np.array([c[4] for c in candles], dtype=float)
+        # EMA5
+        alpha = 2.0 / 6.0
+        ema = closes[0]
+        for v in closes[1:]:
+            ema = alpha * v + (1 - alpha) * ema
+        ema_prev = closes[-6]
+        for v in closes[-5:-1]:
+            ema_prev = alpha * v + (1 - alpha) * ema_prev
+        if ema > ema_prev * 1.001:
+            return "up"
+        elif ema < ema_prev * 0.999:
+            return "down"
+        return "neutral"
+    except Exception:
+        return "neutral"
+
+
 def main():
     session_key = sys.argv[1] if len(sys.argv) > 1 else "ny"
     session = SESSIONS[session_key]
@@ -157,6 +188,19 @@ def main():
             signal = entry_engine.check_entry(symbol, bias, current_step=1)
 
             if signal.state == EntryState.ENTERED:
+                # ── BTC-Korrelations-Check: nicht gegen BTC-Mikrotrend traden ──
+                btc_trend = _check_btc_1m_trend()
+                if bias == "LONG" and btc_trend == "down":
+                    print(f"  [{_ts_str()}] {base}: Entry geblockt — BTC 1m bearish gegen LONG")
+                    tg(f"⚠️ [{name}] {base}: Entry geblockt — BTC 1m bearish")
+                    time.sleep(30)
+                    continue
+                if bias == "SHORT" and btc_trend == "up":
+                    print(f"  [{_ts_str()}] {base}: Entry geblockt — BTC 1m bullish gegen SHORT")
+                    tg(f"⚠️ [{name}] {base}: Entry geblockt — BTC 1m bullish")
+                    time.sleep(30)
+                    continue
+
                 entry_msg = (
                     f"🎯 {mode} ENTRY {bias} {base}\n"
                     f"   Price:  {signal.entry_price:.6f}\n"

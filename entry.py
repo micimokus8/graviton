@@ -197,6 +197,7 @@ class EntryEngine:
         highs   = data[:, 2]
         lows    = data[:, 3]
         opens   = data[:, 1]
+        volumes = data[:, 5]  # für Volumen-Confirmation
 
         # EMA20 (KEIN Smoothing auf 1m — doppelte Glättung erzeugt zu viel Lag)
         ema_raw = self._calc_ema(closes, ema_period)
@@ -247,6 +248,15 @@ class EntryEngine:
         )
 
         if is_rejection:
+            # ── Volumen-Confirmation: Rejection ohne Volumen = False Signal ──
+            if len(volumes) >= 12:
+                avg_vol = float(np.mean(volumes[-12:-2]))  # letzte 10 Kerzen vor Rejection
+                rejection_vol = float(volumes[-2])  # letzte GESCHLOSSENE Kerze
+                if rejection_vol < avg_vol * 1.2:  # mind. 20% über Durchschnitt
+                    # Rejection ohne Volumen → zurück auf AT_EMA, warten
+                    signal.state = EntryState.AT_EMA
+                    return signal
+
             signal.state = EntryState.REJECTION
             signal.rejection = True
             signal.rejection_high = last_high

@@ -146,6 +146,14 @@ class ExitEngine:
 
         # ─── Stufe 3: Strukturell (100%) ───────────────────────
 
+        # B0.5: Soft Profit Lock — +1% ohne Pattern → 50% sichern + Trailing
+        pnl_pct = ((price - entry_price) / entry_price * 100) if side == "long" \
+                  else ((entry_price - price) / entry_price * 100)
+        if pnl_pct >= 1.0 and not trailing_active:
+            return sig(symbol, side, ExitReason.PATTERN, 0.5, price, ema20,
+                      round(dist, 2), round(rsi_val, 1), False, True,
+                      f"[PROFIT LOCK] +{pnl_pct:.1f}% ohne Pattern → 50% + Trailing")
+
         # B1: EMA overextended
         if dist > cfg_exit["ema_overextended_pct"]:
             return sig(symbol, side, ExitReason.EMA_OVEREXTENDED, 1.0, price, ema20,
