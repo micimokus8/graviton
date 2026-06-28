@@ -128,10 +128,10 @@ class BiasAnalyzer:
         lows    = data[:, 3]
         closes  = data[:, 4]
 
-        # Finde Kerzen NACH session_open (Kerzen die um oder nach open starten)
-        # Kraken 15m Kerzen: timestamp ist start der Kerze.
-        # Session open 13:30 UTC → erste relevante Kerze startet um 13:30
-        session_candles_mask = timestamps >= session_open_ts
+        # Finde Kerzen NACH session_open (mit 1s Toleranz gegen Float-Präzision)
+        # Kraken OHLCV-Timestamps sind int Millisekunden, aber float64 → int cast
+        # kann bei Präzisionsverlust 1ms daneben liegen
+        session_candles_mask = timestamps >= (session_open_ts - 1000)
         session_indices = np.where(session_candles_mask)[0]
 
         if len(session_indices) < min_candles:

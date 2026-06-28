@@ -91,6 +91,11 @@ class ExitEngine:
     def check(self, symbol: str, side: str, entry_price: float,
               stop_loss: float, current_step: int,
               trailing_active: bool = False, trailing_price: float = 0.0) -> ExitSignal:
+        """
+        Prüft Exit-Signale. trailing_active/trailing_price werden nur für
+        Kompatibilität mit Watcher.poll() entgegengenommen — der eigentliche
+        Trailing-Stop-Hit wird extern in watcher.py/session.py geprüft.
+        """
         cfg_exit = CFG.exit
         ns = self._no_signal(symbol, side)
         sig = self._sig

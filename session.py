@@ -233,7 +233,8 @@ def main():
     tracked = TrackedPosition(
         symbol=symbol, side=bias.lower(),
         entry_price=entry_price, stop_loss=stop_loss,
-        size=0, steps=1, trailing_active=False, trailing_price=stop_loss,
+        size=0,  # Dry-Run: 0; Live: wird mit fill.size aus trader.open_position() befüllt
+        steps=1, trailing_active=False, trailing_price=stop_loss,
         entry_time=datetime.now(timezone.utc).isoformat(),
         pattern_exit_done=False,
     )
