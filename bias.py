@@ -173,6 +173,26 @@ class BiasAnalyzer:
         all_closes_for_rsi = closes[:idx[-1] + 1] if len(closes) >= 14 else closes
         rsi_value = _rsi(all_closes_for_rsi)
 
+        # ── Daily Trend Context ──────────────────────────────────
+        # Coin der +6% auf 24h aber -0.3% in Session = LONG-Pullback, kein SHORT
+        daily_trend = "NEUTRAL"
+        daily_chg_pct = 0.0
+        try:
+            daily_data = self._fetch_ohlcv(symbol, timeframe="1d", limit=5)
+            if len(daily_data) >= 3:
+                d_closes = daily_data[:, 4]
+                d_close_now = float(d_closes[-1])
+                d_close_1d = float(d_closes[-2])
+                d_close_2d = float(d_closes[-3])
+                daily_chg_pct = (d_close_now - d_close_1d) / d_close_1d * 100
+                two_day_chg = (d_close_now - d_close_2d) / d_close_2d * 100
+                if daily_chg_pct > 2.0 or two_day_chg > 4.0:
+                    daily_trend = "STRONG_UP"
+                elif daily_chg_pct < -2.0 or two_day_chg < -4.0:
+                    daily_trend = "STRONG_DOWN"
+        except Exception:
+            pass
+
         # ─── Bias-Logik ──────────────────────────────────────
         bias = "NOISE"
         reason = ""
@@ -192,6 +212,9 @@ class BiasAnalyzer:
             if rsi_value < rsi_short_min:
                 rsi_blocked = True
                 reason = f"SHORT-Setup aber RSI {rsi_value:.1f} < {rsi_short_min} (überverkauft)"
+            elif daily_trend == "STRONG_UP":
+                bias = "NOISE"
+                reason = f"Session SHORT aber Daily stark UP (+{daily_chg_pct:.1f}%) → NOISE"
             else:
                 bias = "SHORT"
                 reason = f"Preis < Open, {red} rote Kerzen, Lows fallend, RSI {rsi_value:.1f}"
