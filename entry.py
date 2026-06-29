@@ -269,13 +269,24 @@ class EntryEngine:
             # Entry-Preis = Market (aktueller Close)
             signal.entry_price = last_close
 
-            # Stop Loss
+            # Stop Loss mit ATR-Floor (0.2% allein zu eng für volatile Altcoins)
+            # Quick ATR auf 1m: min 0.3× ATR oder sl_offset
+            atr_1m = 0.0
+            if len(highs) >= 5:
+                trs = []
+                for i in range(1, min(15, len(highs))):
+                    tr = max(highs[-i] - lows[-i],
+                             abs(highs[-i] - closes[-i-1]),
+                             abs(lows[-i] - closes[-i-1]))
+                    trs.append(tr)
+                atr_1m = float(np.mean(trs)) if trs else 0.0
+            atr_pct = (atr_1m / last_close * 100) if atr_1m > 0 and last_close > 0 else 0
+            sl_pct = max(sl_offset, atr_pct * 0.3)  # min 0.2% oder 30% von 1m-ATR
+
             if bias == "LONG":
-                # SL = Low der Rejection-Kerze - offset%
-                signal.stop_loss = round(last_low * (1 - sl_offset / 100), 6)
-            else:  # SHORT
-                # SL = High der Rejection-Kerze + offset%
-                signal.stop_loss = round(last_high * (1 + sl_offset / 100), 6)
+                signal.stop_loss = round(last_low * (1 - sl_pct / 100), 6)
+            else:
+                signal.stop_loss = round(last_high * (1 + sl_pct / 100), 6)
 
             signal.state = EntryState.ENTERED
 
