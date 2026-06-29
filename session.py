@@ -181,8 +181,8 @@ def main():
         bias = cand["bias"]
         base = cand["base"]
 
-        msg = f"👁 [{name}] Entry-Polling {base} ({bias}) — alle 30s"
-        print(msg); tg(msg)
+        msg = f"👁 [{name}] Entry-Polling {base} ({bias})"
+        print(msg)  # tg silenced — kein Spam pro Kandidat
 
         last_ema_msg_time = 0
         last_far_msg_time = 0
@@ -204,7 +204,7 @@ def main():
                         if btc_block_count >= 3:
                             tg(f"🔄 [{name}] {base}: 3× BTC-Block — Candidate-Rotation")
                             break
-                        tg(f"⚠️ [{name}] {base}: BTC-Block (×{btc_block_count}/3)")
+                        # silent — nur print
                         time.sleep(30)
                         continue
                     btc_block_count = 0
@@ -254,7 +254,7 @@ def main():
                     now_sec = time.time()
                     if now_sec - last_ema_msg_time > 300:
                         print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
-                        tg(f"⏳ [{name}] {base} an EMA20 ({signal.distance_pct:.2f}%) — warte auf Pullback")
+                        # tg silenced — nur print
                         last_ema_msg_time = now_sec
 
                 elif signal.state in (EntryState.WAITING, EntryState.APPROACHING):
@@ -262,7 +262,7 @@ def main():
                     if now_sec - last_far_msg_time > 600:  # alle 10 Min
                         state_label = "weit entfernt" if signal.state == EntryState.WAITING else "nähert sich"
                         print(f"  [{_ts_str()}] {base}: {signal.distance_pct:.2f}% von EMA ({state_label})...")
-                        tg(f"⏳ [{name}] {base}: {signal.distance_pct:.2f}% von EMA20 — {state_label}")
+                        # tg silenced — nur print
                         last_far_msg_time = now_sec
 
             except Exception as e:
