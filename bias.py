@@ -217,19 +217,8 @@ class BiasAnalyzer:
             else:
                 bias = "SHORT"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → SHORT"
 
-        else:  # NEUTRAL daily — nur starke Session-Signale
-            if price_above_open and green >= min_candles and highs_rising:
-                if rsi_value > rsi_long_max:
-                    rsi_blocked = True; reason = f"LONG-Setup aber RSI {rsi_value:.1f} > {rsi_long_max}"
-                else:
-                    bias = "LONG"; reason = f"Session LONG: {green} grüne Kerzen, Highs↑, RSI {rsi_value:.1f}"
-            elif price_below_open and red >= min_candles and lows_falling:
-                if rsi_value < rsi_short_min:
-                    rsi_blocked = True; reason = f"SHORT-Setup aber RSI {rsi_value:.1f} < {rsi_short_min}"
-                else:
-                    bias = "SHORT"; reason = f"Session SHORT: {red} rote Kerzen, Lows↓, RSI {rsi_value:.1f}"
-            else:
-                reason = f"NEUTRAL: {'über' if price_above_open else 'unter'} Open, {green}grün/{red}rot"
+        else:  # NEUTRAL daily → kein klarer Trend, kein Trade
+            reason = f"Daily NEUTRAL ({daily_chg_pct:+.1f}%) — kein klarer Trend, no trade"
 
         return BiasResult(
             symbol=symbol,
