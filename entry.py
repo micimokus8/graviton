@@ -126,13 +126,13 @@ class EntryEngine:
           - High nahe EMA (weniger als 0.15% drüber)
           - Body > untere Wick
         """
-        body = abs(close - open)
+        body = abs(close - open_)
         if body == 0:
             return False
 
         if bias == "LONG":
             # Grüne Kerze
-            if close <= open:
+            if close <= open_:
                 return False
             # Low sollte nah an EMA sein (EMA diente als Support)
             low_dist = (ema - low) / ema * 100
@@ -144,14 +144,14 @@ class EntryEngine:
 
         elif bias == "SHORT":
             # Rote Kerze
-            if close >= open:
+            if close >= open_:
                 return False
             # High nah an EMA (EMA diente als Resistance)
             high_dist = (high - ema) / ema * 100
             if high_dist > 0.3:
                 return False
             # Body dominant vs upper wick (Rejection nach unten)
-            upper_wick = high - max(open, close)
+            upper_wick = high - max(open_, close)
             return body > upper_wick * 0.5
 
         return False

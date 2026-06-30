@@ -106,9 +106,8 @@ class KrakenScanner:
                 continue
             if not market.get("active", True):
                 continue
-            # Keine Stock-Futures (SPCXX etc.): Crypto hat min 3 Dezimalstellen
-            price_prec = market.get("precision", {}).get("price", 1)
-            if price_prec >= 0.1:
+            # Keine Stock-Indizes/ETFs — nur Crypto
+            if market.get("base", "") in ("SPCXX",):
                 continue
             perps.append(market)
         return perps
