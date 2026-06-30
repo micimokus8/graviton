@@ -69,7 +69,7 @@ def main():
         bias_lines.append(f"  {icon} {r['base']}: {r['bias']} | RSI {r['rsi']}")
     bias_lines.append(f"  → {len(candidates)} Kandidaten, {len(results)-len(candidates)} verworfen")
     bias_msg = "\n".join(bias_lines)
-    print(bias_msg); tg(bias_msg)
+    print(bias_msg)  # tg silenced — Bias-Cron sendet separat
 
     if not candidates:
         print(f"⚠️ [{name}] Keine Bias-Kandidaten — Session beendet.")
