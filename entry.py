@@ -269,24 +269,31 @@ class EntryEngine:
             # Entry-Preis = Market (aktueller Close)
             signal.entry_price = last_close
 
-            # Stop Loss mit ATR-Floor (0.2% allein zu eng für volatile Altcoins)
-            # Quick ATR auf 1m: min 0.3× ATR oder sl_offset
-            atr_1m = 0.0
-            if len(highs) >= 5:
-                trs = []
-                for i in range(1, min(15, len(highs))):
-                    tr = max(highs[-i] - lows[-i],
-                             abs(highs[-i] - closes[-i-1]),
-                             abs(lows[-i] - closes[-i-1]))
-                    trs.append(tr)
-                atr_1m = float(np.mean(trs)) if trs else 0.0
-            atr_pct = (atr_1m / last_close * 100) if atr_1m > 0 and last_close > 0 else 0
-            sl_pct = max(sl_offset, atr_pct * 0.3)  # min 0.2% oder 30% von 1m-ATR
+            # Stop Loss: 1H ATR-basiert (30% des 1H ATR, min 0.3%)
+            # 1m ATR = Mikro-Noise. 1H ATR erfasst echte Coin-Volatilität.
+            atr_1h_pct = 0.0
+            try:
+                ex = self._get_exchange()
+                candles_1h = ex.fetch_ohlcv(symbol, timeframe="1h", limit=20)
+                if len(candles_1h) >= 3:
+                    trs = []
+                    for i in range(1, len(candles_1h)):
+                        h_i, l_i = candles_1h[i][2], candles_1h[i][3]
+                        c_prev = candles_1h[i-1][4]
+                        tr = max(h_i - l_i, abs(h_i - c_prev), abs(l_i - c_prev))
+                        trs.append(tr)
+                    lookback = min(14, len(trs))
+                    atr_1h = float(np.mean(trs[-lookback:]))
+                    atr_1h_pct = (atr_1h / last_close * 100) if atr_1h > 0 and last_close > 0 else 0
+            except Exception:
+                pass
+            # min 0.3% oder 30% des 1H ATR
+            sl_pct = max(atr_1h_pct * 0.3, 0.3)
 
             if bias == "LONG":
-                signal.stop_loss = round(last_low * (1 - sl_pct / 100), 6)
+                signal.stop_loss = round(last_close * (1 - sl_pct / 100), 6)
             else:
-                signal.stop_loss = round(last_high * (1 + sl_pct / 100), 6)
+                signal.stop_loss = round(last_close * (1 + sl_pct / 100), 6)
 
             signal.state = EntryState.ENTERED
 
