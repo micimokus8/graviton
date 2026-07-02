@@ -77,6 +77,8 @@ ENTRY = {
     "max_stair_steps":    1,       # Start: nur erster Pullback
     "max_parallel_coins": 1,
     "fast_entry_distance": 0.80,   # schnell-Entry Distanz bei starkem BTC-Trend
+    "breakout_lookback":  15,      # Kerzen für Breakout-Hoch (15 = 15 Min)
+    "breakout_vol_mult":  1.3,     # Volumen-Faktor für Breakout-Bestätigung
 }
 
 # ─── S/R Kontext ───────────────────────────────────────────────────

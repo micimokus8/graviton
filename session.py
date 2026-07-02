@@ -227,7 +227,8 @@ def main():
                         f"   Price:  {signal.entry_price:.6f}\n"
                         f"   EMA20:  {signal.ema20:.6f}\n"
                         f"   Dist:   {signal.distance_pct:.2f}%\n"
-                        f"   SL:     {signal.stop_loss:.6f}"
+                        f"   SL:     {signal.stop_loss:.6f}\n"
+                        f"   Grund:  {signal.reasoning}"
                     )
                     print(entry_msg); tg(entry_msg)
 
