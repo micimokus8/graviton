@@ -28,12 +28,26 @@ DATA_DIR.mkdir(exist_ok=True)
 WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 ENTRY_STATE_FILE = DATA_DIR / "entry_state.json"
 TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
+DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
 
 
 def _log_trade(event: str, **kwargs):
     """Trade-Event in JSONL loggen."""
     entry = {"timestamp": datetime.now(timezone.utc).isoformat(), "event": event, **kwargs}
     with open(TRADE_LOG_FILE, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def _log_debug(cycle: int, base: str, bias: str, state: str, reason: str, **kwargs):
+    """Pro Polling-Cycle: was hat der Coin gemacht, warum kein Entry.
+    Kein Telegram — nur File-Log für Post-Mortem-Analyse."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "cycle": cycle, "base": base, "bias": bias,
+        "state": state, "reason": reason,
+        **kwargs,
+    }
+    with open(DEBUG_LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
 
@@ -208,7 +222,9 @@ def main():
     print(f"👁 [{name}] Entry-Polling — {len(active_candidates)} Kandidaten: {', '.join(bases)}")
     print(f"   Rotiere alle 30s — erster mit Pullback gewinnt")
 
+    cycle = 0
     while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
+        cycle += 1
         for cand in active_candidates:
             symbol = cand["symbol"]
             bias = cand["bias"]
@@ -216,6 +232,19 @@ def main():
 
             try:
                 signal = entry_engine.check_entry(symbol, bias, current_step=1)
+
+                # Debug-Log pro Coin pro Cycle (nur File, kein Telegram)
+                state_name = signal.state.value if hasattr(signal.state, 'value') else str(signal.state)
+                reason = ""
+                if signal.state == EntryState.WAITING:
+                    reason = f"EMA-Distanz {signal.distance_pct:.2f}% > 1.5% (3× Basis)"
+                elif signal.state == EntryState.APPROACHING:
+                    reason = f"EMA-Distanz {signal.distance_pct:.2f}% > dynamische Distanz"
+                elif signal.state == EntryState.AT_EMA:
+                    reason = f"An EMA ({signal.distance_pct:.2f}%) — warte auf Rejection"
+                _log_debug(cycle, base, bias, state_name, reason,
+                           price=round(signal.price, 6), ema20=round(signal.ema20, 6),
+                           dist=round(signal.distance_pct, 3))
 
                 if signal.state == EntryState.ENTERED:
                     # ── BTC-Korrelations-Check ──
@@ -289,8 +318,27 @@ def main():
     # ─── Nach Entry-Polling ─────────────────────────────────────
 
     if not entered:
-        msg = f"⏱ [{name}] {base}: Kein Entry-Signal bis Session-Ende"
+        # Summary-Log: letzter Status jedes Kandidaten
+        summary_reasons = []
+        for cand in active_candidates:
+            try:
+                sig = entry_engine.check_entry(cand["symbol"], cand["bias"])
+                if sig.state == EntryState.WAITING:
+                    summary_reasons.append(f"{cand['base']}: {sig.distance_pct:.1f}% von EMA (zu weit)")
+                elif sig.state == EntryState.APPROACHING:
+                    summary_reasons.append(f"{cand['base']}: {sig.distance_pct:.1f}% von EMA (nähert sich)")
+                elif sig.state == EntryState.AT_EMA:
+                    summary_reasons.append(f"{cand['base']}: an EMA — keine Rejection")
+                else:
+                    summary_reasons.append(f"{cand['base']}: {sig.state}")
+            except Exception as e:
+                summary_reasons.append(f"{cand['base']}: Fehler — {e}")
+        msg = f"⏱ [{name}] Kein Entry — {len(active_candidates)} Coins geprüft, {cycle} Cycles\n"
+        for r in summary_reasons:
+            msg += f"   {r}\n"
         print(msg); tg(msg)
+        _log_debug(cycle, "SESSION", "END", "NO_ENTRY", f"{len(active_candidates)} Coins, {cycle} Cycles",
+                   candidates=[c["base"] for c in active_candidates])
 
     # ─── Phase 3: Watcher (mit Trailing-Stop) ────────────────────
 
