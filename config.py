@@ -72,13 +72,10 @@ ENTRY = {
     "timeframe":          "1m",
     "ema_period":         20,
     "ema_smoothing":      9,
-    "ema_distance_max":   0.50,    # erhöht von 0.30 — mehr Spielraum für Entry
+    "ema_distance_max":   0.50,    # Basis-Distanz; wird dynamisch via 24h-Change skaliert
     "sl_offset_pct":      0.20,    # wird vom 1H-ATR überschrieben
     "max_stair_steps":    1,       # Start: nur erster Pullback
     "max_parallel_coins": 1,
-    "fast_entry_distance": 0.80,   # schnell-Entry Distanz bei starkem BTC-Trend
-    "breakout_lookback":  15,      # Kerzen für Breakout-Hoch (15 = 15 Min)
-    "breakout_vol_mult":  1.3,     # Volumen-Faktor für Breakout-Bestätigung
 }
 
 # ─── S/R Kontext ───────────────────────────────────────────────────

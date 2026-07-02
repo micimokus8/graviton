@@ -157,110 +157,29 @@ class EntryEngine:
 
         return False
 
-    # ─── Breakout Detection ─────────────────────────────────────
+    # ─── Hilfsfunktion: dynamische EMA-Max-Distanz ──────────────
 
-    def _check_breakout(
-        self,
-        highs: np.ndarray, lows: np.ndarray, closes: np.ndarray,
-        volumes: np.ndarray, bias: str, fast_mode: bool,
-    ) -> Optional[EntrySignal]:
+    def _dynamic_max_dist(self, symbol: str, bias: str) -> float:
         """
-        Prüft ob ein Breakout vorliegt: Preis bricht 15-Min-Hoch/-Tief mit Volumen.
+        EMA-Distanz basierend auf 24h-Change des Coins.
+        Je stärker der Move, desto weiter die erlaubte Distanz.
 
-        LONG Breakout: letzte Kerze schließt über dem höchsten High der letzten N Kerzen
-        SHORT Breakout: letzte Kerze schließt unter dem tiefsten Low der letzten N Kerzen
-
-        Volumen muss > 1.3x (normal) / 1.0x (fast mode) Durchschnitt sein.
+        daily_move < 5%   → 0.30% (enger Pullback)
+        daily_move 5-10%  → 0.60% (moderat)
+        daily_move > 10%  → 1.00% (weiter — Momentum-Tag)
         """
-        if len(closes) < 20:
-            return None
-
-        cfg = CFG.entry
-        lookback = cfg["breakout_lookback"]
-        vol_mult = 1.0 if fast_mode else cfg["breakout_vol_mult"]
-
-        last_close = float(closes[-1])
-        last_high = float(highs[-1])
-        last_low = float(lows[-1])
-        last_vol = float(volumes[-1])
-        last_open = float(closes[-1])  # wird später überschrieben
-
-        # Durchschnittsvolumen der letzten 10 Kerzen (vor der aktuellen)
-        avg_vol = float(np.mean(volumes[-11:-1])) if len(volumes) >= 11 else float(np.mean(volumes[-5:]))
-
-        if bias == "LONG":
-            # Höchstes High der letzten N Kerzen
-            recent_highs = highs[-(lookback + 1):-1]  # letzte N geschlossene, exkl. aktuelle
-            breakout_level = float(np.max(recent_highs)) if len(recent_highs) > 0 else last_high
-            if last_close > breakout_level and last_vol >= avg_vol * vol_mult:
-                # Breakout bestätigt
-                entry_price = last_close
-                stop_loss = round(float(np.min(lows[-5:])), 6)  # SL = 5-Min-Tief
-
-                signal = self._build_entry(None, bias, entry_price, stop_loss, last_high, volumes, entry_price)
-                signal.state = EntryState.ENTERED
-                signal.reasoning = f"Breakout: über 15Min-Hoch {breakout_level:.4f} (Vol {last_vol/avg_vol:.1f}x)"
-                return signal
-
-        elif bias == "SHORT":
-            # Tiefstes Low der letzten N Kerzen
-            recent_lows = lows[-(lookback + 1):-1]
-            breakout_level = float(np.min(recent_lows)) if len(recent_lows) > 0 else last_low
-            if last_close < breakout_level and last_vol >= avg_vol * vol_mult:
-                entry_price = last_close
-                stop_loss = round(float(np.max(highs[-5:])), 6)  # SL = 5-Min-Hoch
-
-                signal = self._build_entry(None, bias, entry_price, stop_loss, last_high, volumes, entry_price)
-                signal.state = EntryState.ENTERED
-                signal.reasoning = f"Breakout: unter 15Min-Tief {breakout_level:.4f} (Vol {last_vol/avg_vol:.1f}x)"
-                return signal
-
-        return None
-
-    # ─── Shared Entry Builder (SL/TP) ───────────────────────────
-
-    def _build_entry(
-        self, signal, bias: str, entry_price: float,
-        last_low: float, last_high: float, volumes: np.ndarray,
-        last_close: float,
-    ) -> EntrySignal:
-        """Baut EntrySignal mit 1H-ATR-basiertem SL und Reasoning."""
-        if signal is None:
-            signal = EntrySignal(
-                symbol="", bias=bias, state=EntryState.ENTERED,
-                price=entry_price, ema20=entry_price, distance_pct=0,
-                rejection=False, rejection_high=0, rejection_low=0,
-                rejection_close=0, entry_price=entry_price, stop_loss=0,
-                step=1, timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-
-        signal.entry_price = entry_price
-
-        # 1H ATR für SL
-        atr_1h_pct = 0.0
+        base_dist = CFG.entry["ema_distance_max"]
         try:
             ex = self._get_exchange()
-            candles_1h = ex.fetch_ohlcv(signal.symbol if signal.symbol else "BTC/USD:USD", timeframe="1h", limit=20)
-            if len(candles_1h) >= 3:
-                trs = []
-                for i in range(1, len(candles_1h)):
-                    h_i, l_i = candles_1h[i][2], candles_1h[i][3]
-                    c_prev = candles_1h[i-1][4]
-                    tr = max(h_i - l_i, abs(h_i - c_prev), abs(l_i - c_prev))
-                    trs.append(tr)
-                lookback = min(14, len(trs))
-                atr_1h = float(np.mean(trs[-lookback:]))
-                atr_1h_pct = (atr_1h / entry_price * 100) if atr_1h > 0 and entry_price > 0 else 0
+            ticker = ex.fetch_ticker(symbol)
+            change_24h = abs(float(ticker.get("percentage", 0) or 0))
+            if change_24h >= 10:
+                return max(base_dist, 1.00)
+            elif change_24h >= 5:
+                return max(base_dist, 0.60)
         except Exception:
             pass
-        sl_pct = max(atr_1h_pct * 0.3, 0.3)
-
-        if bias == "LONG":
-            signal.stop_loss = round(entry_price * (1 - sl_pct / 100), 6)
-        else:
-            signal.stop_loss = round(entry_price * (1 + sl_pct / 100), 6)
-
-        return signal
+        return base_dist
 
     # ─── Main Entry Check ──────────────────────────────────────
 
@@ -269,7 +188,6 @@ class EntryEngine:
         symbol: str,
         bias: str,
         current_step: int = 1,
-        fast_mode: bool = False,
     ) -> EntrySignal:
         """
         Prüft ob ein Entry-Signal vorliegt.
@@ -278,7 +196,6 @@ class EntryEngine:
             symbol: CCXT Symbol
             bias: "LONG" oder "SHORT" (vom BiasAnalyzer)
             current_step: aktuelle Treppenstufe (1-4)
-            fast_mode: wenn True, weitere Entry-Distanz (0.8% statt 0.5%)
 
         Returns:
             EntrySignal mit state und details
@@ -286,7 +203,7 @@ class EntryEngine:
         cfg = CFG.entry
         ema_period = cfg["ema_period"]
         smoothing = cfg["ema_smoothing"]
-        max_dist = cfg["fast_entry_distance"] if fast_mode else cfg["ema_distance_max"]
+        max_dist = self._dynamic_max_dist(symbol, bias)
         sl_offset = cfg["sl_offset_pct"]
         max_steps = cfg["max_stair_steps"]
 
@@ -331,49 +248,71 @@ class EntryEngine:
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
-        # ─── 1. Pullback-Mode: Preis an EMA20 + Rejection ────────────
+        # ─── Nur Pullback-Mode: Preis an EMA20 + Rejection ─────────
 
         # Entfernt von EMA → warten
         if distance_pct > max_dist * 3:
             signal.state = EntryState.WAITING
-            # Fall durch zu Breakout-Check — auch wenn weit von EMA, Breakout möglich
-        else:
-            # Annähernd an EMA → APPROACHING
-            if distance_pct > max_dist:
-                signal.state = EntryState.APPROACHING
+            return signal
+
+        # Annähernd an EMA → APPROACHING
+        if distance_pct > max_dist:
+            signal.state = EntryState.APPROACHING
+            return signal
+
+        # Preis an der EMA → AT_EMA + Rejection-Prüfung
+        signal.state = EntryState.AT_EMA
+
+        # Rejection-Prüfung auf letzter Kerze
+        last_open  = float(opens[-1])
+        last_high  = float(highs[-1])
+        last_low   = float(lows[-1])
+        last_close = float(closes[-1])
+
+        is_rejection = self._is_rejection_candle(
+            last_open, last_high, last_low, last_close,
+            current_ema, bias,
+        )
+
+        if is_rejection:
+            # ── Volumen-Confirmation ──
+            if len(volumes) >= 12:
+                avg_vol = float(np.mean(volumes[-12:-2]))
+                rejection_vol = float(volumes[-2])
+                if rejection_vol >= avg_vol * 1.2:
+                    signal.entry_price = last_close
+                    # 1H ATR für SL
+                    atr_1h_pct = 0.0
+                    try:
+                        ex = self._get_exchange()
+                        candles_1h = ex.fetch_ohlcv(symbol, timeframe="1h", limit=20)
+                        if len(candles_1h) >= 3:
+                            trs = []
+                            for i in range(1, len(candles_1h)):
+                                h_i, l_i = candles_1h[i][2], candles_1h[i][3]
+                                c_prev = candles_1h[i-1][4]
+                                tr = max(h_i - l_i, abs(h_i - c_prev), abs(l_i - c_prev))
+                                trs.append(tr)
+                            lookback = min(14, len(trs))
+                            atr_1h = float(np.mean(trs[-lookback:]))
+                            atr_1h_pct = (atr_1h / last_close * 100) if atr_1h > 0 and last_close > 0 else 0
+                    except Exception:
+                        pass
+                    sl_pct = max(atr_1h_pct * 0.3, 0.3)
+                    if bias == "LONG":
+                        signal.stop_loss = round(last_close * (1 - sl_pct / 100), 6)
+                    else:
+                        signal.stop_loss = round(last_close * (1 + sl_pct / 100), 6)
+                    signal.state = EntryState.ENTERED
+                    signal.reasoning = f"Pullback: Rejection an EMA ({distance_pct:.2f}%)"
+                    return signal
+                else:
+                    # Volumen zu niedrig → noch warten
+                    return signal
             else:
-                # Preis an der EMA → AT_EMA + Rejection-Prüfung
-                signal.state = EntryState.AT_EMA
+                # Zu wenig Daten → warten
+                return signal
 
-            # Rejection-Prüfung auf letzter Kerze
-            last_open  = float(opens[-1])
-            last_high  = float(highs[-1])
-            last_low   = float(lows[-1])
-            last_close = float(closes[-1])
-
-            is_rejection = self._is_rejection_candle(
-                last_open, last_high, last_low, last_close,
-                current_ema, bias,
-            )
-
-            if is_rejection:
-                # ── Volumen-Confirmation ──
-                vol_threshold = 1.0 if fast_mode else 1.2
-                if len(volumes) >= 12:
-                    avg_vol = float(np.mean(volumes[-12:-2]))
-                    rejection_vol = float(volumes[-2])
-                    if rejection_vol >= avg_vol * vol_threshold:
-                        signal = self._build_entry(signal, bias, last_close, last_low, last_high, volumes, last_close)
-                        signal.state = EntryState.ENTERED
-                        signal.reasoning = f"Pullback: Rejection an EMA ({distance_pct:.2f}%)"
-                        return signal
-
-        # ─── 2. Breakout-Mode: Preis bricht 15-Min-Hoch/-Tief mit Volumen ───
-        breakout_signal = self._check_breakout(highs, lows, closes, volumes, bias, fast_mode)
-        if breakout_signal is not None:
-            return breakout_signal
-
-        # Kein Entry — Status zurückmelden
         return signal
 
     # ─── Active Position Tracking ──────────────────────────────

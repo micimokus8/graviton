@@ -162,61 +162,50 @@ def main():
 
     # ─── Phase 2: Entry Polling ──────────────────────────────────
 
-    # Iteriere Kandidaten, nimm ersten nicht-geblockten
-    # Candidate-Rotation: äußere Loop iteriert Kandidaten
+    # Candidate-Rotation: alle Kandidaten rotierend prüfen, nicht nur ersten
     entry_engine = EntryEngine()
     exit_engine = ExitEngine()
     entered = False
     entry_price = 0.0
     stop_loss = 0.0
-    candidate_idx = 0
-    while candidate_idx < len(candidates) and not entered:
-        cand = candidates[candidate_idx]
+    last_status_msg = 0
+
+    # S/R vorab prüfen — blockierte Kandidaten aussortieren
+    active_candidates = []
+    for cand in candidates:
         blocked, reason, sr = check_sr_for_entry(cand["symbol"], cand["price"], cand["bias"])
         if blocked:
-            print(f"🚫 {cand["base"]}: S/R-Block — {reason}")
-            tg(f"🚫 [{name}] {cand["base"]}: S/R-Block — {reason}")
-            candidate_idx += 1
-            continue
+            print(f"🚫 {cand['base']}: S/R-Block — {reason}")
+            tg(f"🚫 [{name}] {cand['base']}: S/R-Block — {reason}")
+        else:
+            active_candidates.append(cand)
 
-        symbol = cand["symbol"]
-        bias = cand["bias"]
-        base = cand["base"]
+    if not active_candidates:
+        msg = f"⚠️ [{name}] Alle Kandidaten S/R-geblockt — Session beendet."
+        print(msg); tg(msg)
+        return
 
-        msg = f"👁 [{name}] Entry-Polling {base} ({bias})"
-        print(msg)  # tg silenced — kein Spam pro Kandidat
+    bases = [c["base"] for c in active_candidates]
+    print(f"👁 [{name}] Entry-Polling — {len(active_candidates)} Kandidaten: {', '.join(bases)}")
+    print(f"   Rotiere alle 30s — erster mit Pullback gewinnt")
 
-        # Fast Mode: erste 30 Min nach Session-Open mit weiterer Entry-Distanz + schnellerem Polling
-        fast_mode = datetime.now(timezone.utc) < open_dt + timedelta(minutes=30)
+    while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
+        for cand in active_candidates:
+            symbol = cand["symbol"]
+            bias = cand["bias"]
+            base = cand["base"]
 
-        last_ema_msg_time = 0
-        last_far_msg_time = 0
-        btc_block_count = 0
-        poll_count = 0
-
-        while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
             try:
-                # Primo-Minuten: schneller poll (15s) für Sofort-Entry bei Börsenöffnung
-                poll_count += 1
-                signal = entry_engine.check_entry(symbol, bias, current_step=1, fast_mode=fast_mode)
-                poll_interval = 15 if fast_mode else 30
+                signal = entry_engine.check_entry(symbol, bias, current_step=1)
 
                 if signal.state == EntryState.ENTERED:
-                    # ── BTC-Korrelations-Check mit Candidate-Rotation ──
+                    # ── BTC-Korrelations-Check ──
                     btc_trend = _check_btc_1m_trend()
                     btc_blocked = (bias == "LONG" and btc_trend == "down") or \
                                   (bias == "SHORT" and btc_trend == "up")
                     if btc_blocked:
-                        btc_block_count += 1
-                        direction = "bearish" if bias == "LONG" else "bullish"
-                        print(f"  [{_ts_str()}] {base}: BTC 1m {direction} (×{btc_block_count}/3)")
-                        if btc_block_count >= 3:
-                            tg(f"🔄 [{name}] {base}: 3× BTC-Block — Candidate-Rotation")
-                            break
-                        # silent — nur print
-                        time.sleep(30)
+                        print(f"  [{_ts_str()}] {base}: BTC 1m {'bearish' if bias == 'LONG' else 'bullish'} — skip")
                         continue
-                    btc_block_count = 0
 
                     # ── Trade Log: ENTRY ──
                     _log_trade("entry", symbol=symbol, base=base, bias=bias,
@@ -235,8 +224,6 @@ def main():
                     entered = True
                     entry_price = signal.entry_price
                     stop_loss = signal.stop_loss
-
-                    # Track step in engine
                     entry_engine.increment_step(symbol)
 
                     # LIVE: execute trade
@@ -258,28 +245,27 @@ def main():
                             "entry": entry_price, "sl": stop_loss,
                             "time": datetime.now(timezone.utc).isoformat(),
                         }, f, indent=2)
-                    break
+                    break  # inner loop (candidates)
 
                 elif signal.state == EntryState.AT_EMA:
                     now_sec = time.time()
-                    if now_sec - last_ema_msg_time > 300:
+                    if now_sec - last_status_msg > 300:
                         print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
-                        # tg silenced — nur print
-                        last_ema_msg_time = now_sec
+                        last_status_msg = now_sec
 
                 elif signal.state in (EntryState.WAITING, EntryState.APPROACHING):
-                    now_sec = time.time()
-                    if now_sec - last_far_msg_time > 600:  # alle 10 Min
-                        state_label = "weit entfernt" if signal.state == EntryState.WAITING else "nähert sich"
-                        print(f"  [{_ts_str()}] {base}: {signal.distance_pct:.2f}% von EMA ({state_label})...")
-                        # tg silenced — nur print
-                        last_far_msg_time = now_sec
+                    pass  # kein Output — zu viel Spam bei 8 Coins
 
             except Exception as e:
-                print(f"  Entry-Fehler: {e}")
+                print(f"  {base}: Entry-Fehler — {e}")
 
-            time.sleep(poll_interval)
-        candidate_idx += 1
+            if entered:
+                break  # outer while loop
+
+        if entered:
+            break
+
+        time.sleep(30)
 
     # ─── Nach Entry-Polling ─────────────────────────────────────
 
