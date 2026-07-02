@@ -163,6 +163,7 @@ class EntryEngine:
         symbol: str,
         bias: str,
         current_step: int = 1,
+        fast_mode: bool = False,
     ) -> EntrySignal:
         """
         Prüft ob ein Entry-Signal vorliegt.
@@ -171,6 +172,7 @@ class EntryEngine:
             symbol: CCXT Symbol
             bias: "LONG" oder "SHORT" (vom BiasAnalyzer)
             current_step: aktuelle Treppenstufe (1-4)
+            fast_mode: wenn True, weitere Entry-Distanz (0.8% statt 0.5%)
 
         Returns:
             EntrySignal mit state und details
@@ -178,7 +180,7 @@ class EntryEngine:
         cfg = CFG.entry
         ema_period = cfg["ema_period"]
         smoothing = cfg["ema_smoothing"]
-        max_dist = cfg["ema_distance_max"]
+        max_dist = cfg["fast_entry_distance"] if fast_mode else cfg["ema_distance_max"]
         sl_offset = cfg["sl_offset_pct"]
         max_steps = cfg["max_stair_steps"]
 
@@ -249,13 +251,14 @@ class EntryEngine:
 
         if is_rejection:
             # ── Volumen-Confirmation: Rejection ohne Volumen = False Signal ──
+            vol_threshold = 1.0 if fast_mode else 1.2  # Fast Mode: kein Volumen-Filter
             if len(volumes) < 12:
                 # Zu wenig Daten (Session-Start) → warten statt blind entry
                 signal.state = EntryState.AT_EMA
                 return signal
             avg_vol = float(np.mean(volumes[-12:-2]))  # letzte 10 Kerzen vor Rejection
             rejection_vol = float(volumes[-2])  # letzte GESCHLOSSENE Kerze
-            if rejection_vol < avg_vol * 1.2:  # mind. 20% über Durchschnitt
+            if rejection_vol < avg_vol * vol_threshold:  # Volumen-Schwellwert
                 # Rejection ohne Volumen → zurück auf AT_EMA, warten
                 signal.state = EntryState.AT_EMA
                 return signal

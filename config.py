@@ -72,10 +72,11 @@ ENTRY = {
     "timeframe":          "1m",
     "ema_period":         20,
     "ema_smoothing":      9,
-    "ema_distance_max":   0.30,
-    "sl_offset_pct":      0.20,
-    "max_stair_steps":    1,          # Start: nur erster Pullback
+    "ema_distance_max":   0.50,    # erhöht von 0.30 — mehr Spielraum für Entry
+    "sl_offset_pct":      0.20,    # wird vom 1H-ATR überschrieben
+    "max_stair_steps":    1,       # Start: nur erster Pullback
     "max_parallel_coins": 1,
+    "fast_entry_distance": 0.80,   # schnell-Entry Distanz bei starkem BTC-Trend
 }
 
 # ─── S/R Kontext ───────────────────────────────────────────────────

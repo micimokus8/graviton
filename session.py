@@ -120,7 +120,9 @@ def main():
     # ─── Phase 1: Bias ───────────────────────────────────────────
 
     session_open_ts = int(open_dt.timestamp() * 1000)
-    bias_time = open_dt + timedelta(minutes=31)  # 31 Min = 2 abgeschlossene 15m-Kerzen
+    # Früherer Bias: 16 Min statt 31 Min (1 × 15m Kerze + 1 Min Puffer)
+    # So haben wir 15 Minuten mehr Zeit für Entry-Polling
+    bias_time = open_dt + timedelta(minutes=16)
 
     wait_s = (bias_time - datetime.now(timezone.utc)).total_seconds()
     if wait_s > 0:
@@ -184,13 +186,20 @@ def main():
         msg = f"👁 [{name}] Entry-Polling {base} ({bias})"
         print(msg)  # tg silenced — kein Spam pro Kandidat
 
+        # Fast Mode: erste 30 Min nach Session-Open mit weiterer Entry-Distanz + schnellerem Polling
+        fast_mode = datetime.now(timezone.utc) < open_dt + timedelta(minutes=30)
+
         last_ema_msg_time = 0
         last_far_msg_time = 0
         btc_block_count = 0
+        poll_count = 0
 
         while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
             try:
-                signal = entry_engine.check_entry(symbol, bias, current_step=1)
+                # Primo-Minuten: schneller poll (15s) für Sofort-Entry bei Börsenöffnung
+                poll_count += 1
+                signal = entry_engine.check_entry(symbol, bias, current_step=1, fast_mode=fast_mode)
+                poll_interval = 15 if fast_mode else 30
 
                 if signal.state == EntryState.ENTERED:
                     # ── BTC-Korrelations-Check mit Candidate-Rotation ──
@@ -268,9 +277,7 @@ def main():
             except Exception as e:
                 print(f"  Entry-Fehler: {e}")
 
-            time.sleep(30)
-
-        # Inner loop end → nächster Kandidat
+            time.sleep(poll_interval)
         candidate_idx += 1
 
     # ─── Nach Entry-Polling ─────────────────────────────────────
