@@ -6,7 +6,7 @@
 
 Graviton trades crypto perpetuals on Kraken by hunting momentum pullbacks
 to the EMA20. It scans for coins with strong intraday moves (4–18% / 24h),
-confirms directional bias from the first 15m candles after session open,
+confirms directional bias from the first 15m candle after session open,
 then enters on 1m timeframe when price gravitates back to the EMA20 line
 and shows a rejection signal.
 
@@ -19,37 +19,43 @@ and shows a rejection signal.
 ## Strategy
 
 ```
-Scan (30m before) → Bias (15m candles) → Entry (1m EMA20 Pullback) → Exit (3 Levels)
+Scan (30m before) → Bias (15m candle) → Entry (1m EMA20 Pullback) → Exit (3 Levels)
 ```
 
 ### 1. Scan — Momentum Filter (30 min before session)
+
 - 24h Change: 4% – 18%
 - 24h Volume: > $750,000 USD
 - Max 8 coins on watchlist
 - Sorted by abs(change) descending
 
-### 2. Bias — Directional Analysis (15m after session open)
-- First 2–3 closed 15m candles → LONG / SHORT / NOISE
-- **LONG:** Price above open, 2+ green candles, rising highs
-- **SHORT:** Price below open, 2+ red candles, falling lows
-- **NOISE:** Mixed → coin discarded
+### 2. Bias — Directional Analysis (16 min after session open)
+
+- **1 closed 15m candle** → LONG / SHORT / NOISE (früher: 2 Kerzen / 31 Min)
+- Daily-Trend-Kontext: +6% auf 24h + kleine rote Session-Kerze = LONG-Pullback
 - RSI guard: RSI > 80 blocks LONG, RSI < 20 blocks SHORT
-- S/R check: < 0.5% to nearest S/R level → entry blocked
+- **Früher Bias (16 Min statt 31 Min)** gibt 15 Min mehr Entry-Zeit
 
 ### 3. Entry — EMA20 Pullback (1m chart, during session)
-- Wait for price to pull back near EMA20 (< 0.3% distance)
+
+- Wait for price to pull back near EMA20 (< 0.50% distance, < 0.80% im Fast Mode)
 - Confirm rejection candle at EMA20
-- SL: 0.2% above/below rejection candle high/low
+- **Fast Mode (erste 30 Min nach Open):**
+  - 0.80% Entry-Distanz (weiter gefasst für Börsenöffnung)
+  - Polling alle 15s statt 30s
+  - Kein Volumen-Filter (1.0× statt 1.2×)
+- **SL: 1H-ATR-basiert** (30% des 1H ATR, min 0.3%) — dynamisch pro Coin
+  - Früher: fix 0.20% vom Kerzen-Low → zu eng für volatile Coins
+  - Jetzt: `last_close * (1 - max(ATR_1h * 0.3, 0.3%))`
 - 1 position per session, 1 coin
 - Position size: ~$100 (17.5% of equity)
-- Polls every 30s until entry or session end
 
 ### 4. Exit — 3 Levels
 
 | Level | Trigger | Action | SL After |
-|---|---|---|---|
-| **1/3** | Candlestick reversal pattern (e.g., Shooting Star, Engulfing) | Close 50% | Move SL to entry (break-even) |
-| **2/3** | EMA overextended (>2.5%), S/R reached, RSI extreme, or original SL hit | Close 100% | — |
+|-------|---------|--------|----------|
+| **1/3** | Candlestick reversal pattern (e.g., Shooting Star, Engulfing) or +1% profit lock | Close 50% | Move SL to entry (break-even) + Trailing |
+| **2/3** | EMA overextended (>2.5%), S/R reached, RSI extreme, Trailing Stop hit, or original SL | Close 100% | — |
 | **3/3** | Session end (16:00 NY / 02:00 Asia UTC) | Force close all | — |
 
 ### Telegram Updates
@@ -57,7 +63,7 @@ Scan (30m before) → Bias (15m candles) → Entry (1m EMA20 Pullback) → Exit 
 Every key event is delivered live via Telegram:
 ```
 🧠 [NY] Bias: 🟢 NEAR: LONG | RSI 58.3
-👁 [NY] Entry-Polling NEAR (LONG) — alle 30s
+👁 [NY] Entry-Polling NEAR (LONG) — alle 15s
 🎯 [DRY RUN] ENTRY LONG NEAR @ 1.923 | SL 1.919
 📤 [DRY RUN] EXIT 50% LONG NEAR — Pattern: Shooting Star → SL auf Break-Even
 ✅ [NY] Session Ende
@@ -137,21 +143,23 @@ python telegram_sender.py
 ### Live Mode
 
 Set `DRY_RUN = False` in `config.py` to enable live trading.  
-Start with `--dry-run` first for at least one week.
+Start with dry-run first for at least one week.
 
 ## Cron Jobs (Hermes Agent)
 
 ```
 Job              UTC     CEST    Schedule
-──────────────── ──────  ──────  ────────
-NY Scan          13:00   15:00   daily
-NY Session       13:30   15:30   daily
-Asia Scan        23:30   01:30   daily (paused week 1)
-Asia Session     00:00   02:00   daily (paused week 1)
+───────────────  ──────  ──────  ────────
+NY Bias          14:01   16:01   daily
+NY Session       14:02   16:02   daily
+NY Scan (pre)    13:00   15:00   daily  → watchlist für Bias
+Asia Scan        23:30   01:30   daily (paused)
+Asia Session     00:00   02:00   daily (paused)
 ```
 
 - **Scan** saves watchlist to `data/watchlist.json`
-- **Session** reads watchlist, runs bias, entry polling, watcher, and closes at session end
+- **Bias** läuft 16 Min nach Session-Open (1 geschlossene 15m Kerze)
+- **Session** startet direkt: Bias → Entry Polling (Fast Mode 15s) → Watcher → Close
 - Empty watchlist → session skips automatically
 
 ## Configuration
@@ -159,7 +167,7 @@ Asia Session     00:00   02:00   daily (paused week 1)
 All parameters in `config.py`:
 
 | Section | Key | Value | Description |
-|---|---|---|---|
+|---------|-----|-------|-------------|
 | DRY_RUN | — | `True` | No live orders |
 | SESSIONS | ny/asia | 13:30/00:00 | Session open/close times UTC |
 | SCAN | min/max_change_pct | 4.0 / 18.0 | 24h change filter |
@@ -168,14 +176,26 @@ All parameters in `config.py`:
 | BIAS | rsi_long_max/short_min | 80 / 20 | RSI block thresholds |
 | ENTRY | ema_period | 20 | EMA length |
 | ENTRY | ema_smoothing | 9 | SMA smoothing over EMA |
-| ENTRY | ema_distance_max | 0.30 | Max % distance for entry |
-| ENTRY | sl_offset_pct | 0.20 | SL offset from rejection candle |
+| ENTRY | **ema_distance_max** | **0.50** | Max % distance for entry (früher 0.30) |
+| ENTRY | **fast_entry_distance** | **0.80** | Entry-Distanz in Fast Mode (erste 30 Min) |
+| ENTRY | sl_offset_pct | 0.20 | Fallback SL offset (wird von 1H-ATR überschrieben) |
 | ENTRY | max_parallel_coins | 1 | Coins per session |
 | SR | min_distance_pct | 0.50 | Min % to nearest S/R |
 | POSITION | account_risk_pct_per_coin | 17.5 | ~$100 at $570 equity |
 | EXIT | ema_overextended_pct | 2.50 | Structural exit trigger |
 | EXIT | trailing_pct | 0.30 | Trailing stop distance |
 | EXIT | rsi_extreme_long/short | 78 / 22 | RSI extreme exit |
+
+### Eingeführte Änderungen (Juli 2026)
+
+| Änderung | Alt | Neu | Grund |
+|----------|-----|-----|-------|
+| **Bias-Timing** | 31 Min nach Open (2 Kerzen) | **16 Min** (1 Kerze) | 15 Min mehr Entry-Zeit |
+| **Entry-Distanz** | 0.30% | **0.50%** (Fast: 0.80%) | Coins atmen 1%+ pro 1m Kerze |
+| **SL-Berechnung** | fix 0.20% vom Kerzen-Low | **1H-ATR × 30%** (min 0.3%) | Dynamisch pro Coin-Volatilität |
+| **Polling** | alle 30s | **15s** in Fast Mode | Schneller Entry bei Börsenöffnung |
+| **Volumen-Filter** | 1.2× | **1.0×** in Fast Mode | Early Momentum ohne Volume-Hürde |
+| **Fast Mode** | — | erste **30 Min** nach Open | Extra-Push für Börsenöffnung |
 
 ## API Keys
 
