@@ -170,15 +170,34 @@ def main():
     stop_loss = 0.0
     last_status_msg = 0
 
-    # S/R vorab prüfen — blockierte Kandidaten aussortieren
+    # S/R vorab prüfen — blockierte Kandidaten notieren, aber nicht hart ausschließen
     active_candidates = []
+    blocked_candidates = []  # für Fallback wenn alle blockiert
     for cand in candidates:
         blocked, reason, sr = check_sr_for_entry(cand["symbol"], cand["price"], cand["bias"])
         if blocked:
+            # Distanz zum S/R-Level berechnen für Fallback-Sortierung
+            try:
+                if cand["bias"] == "LONG":
+                    res = sr.nearest_resistance(cand["price"])
+                    sr_dist = (res - cand["price"]) / cand["price"] * 100 if res else 0
+                else:
+                    sup = sr.nearest_support(cand["price"])
+                    sr_dist = (cand["price"] - sup) / cand["price"] * 100 if sup else 0
+            except:
+                sr_dist = 0
             print(f"🚫 {cand['base']}: S/R-Block — {reason}")
-            tg(f"🚫 [{name}] {cand['base']}: S/R-Block — {reason}")
+            blocked_candidates.append((sr_dist, cand))
         else:
             active_candidates.append(cand)
+
+    # Fallback: wenn alle durch S/R blockiert → nimm den mit der größten Distanz
+    if not active_candidates and blocked_candidates:
+        blocked_candidates.sort(key=lambda x: -x[0])  # größte Distanz zuerst
+        fallback = blocked_candidates[0][1]
+        print(f"⚠️ Alle Kandidaten S/R-geblockt — Fallback: {fallback['base']} ({blocked_candidates[0][0]:.2f}% Distanz)")
+        tg(f"⚠️ [{name}] Alle S/R-geblockt — Fallback {fallback['base']} ({blocked_candidates[0][0]:.2f}%)")
+        active_candidates.append(fallback)
 
     if not active_candidates:
         msg = f"⚠️ [{name}] Alle Kandidaten S/R-geblockt — Session beendet."
