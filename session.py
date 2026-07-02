@@ -349,142 +349,143 @@ def main():
 
     print(f"[{_ts_str()}] Watcher aktiv — überwache {base} {bias}...")
 
-    from watcher import Watcher, TrackedPosition
-    watcher = Watcher()
-    tracked = TrackedPosition(
-        symbol=symbol, side=bias.lower(),
-        entry_price=entry_price, stop_loss=stop_loss,
-        size=0,  # Dry-Run: 0; Live: wird mit fill.size aus trader.open_position() befüllt
-        steps=1, trailing_active=False, trailing_price=stop_loss,
-        entry_time=datetime.now(timezone.utc).isoformat(),
-        pattern_exit_done=False,
-    )
-    watcher.add_position(tracked)
+    if DRY_RUN:
+        # DRY RUN: kein echter Watcher — nur bis Session-Ende warten
+        print(f"   DRY RUN: Position simuliert — Exit/TP/SL werden nicht getrackt")
+        print(f"   Nächste Session: ~{close_dt.strftime('%H:%M')} UTC (Session-Ende)")
+        while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
+            try:
+                price_data = entry_engine._fetch_1m(symbol, limit=3)
+                if len(price_data) > 0:
+                    current_px = float(price_data[-1][4])
+                    pnl = ((current_px - entry_price) / entry_price * 100) if bias == "LONG" \
+                          else ((entry_price - current_px) / entry_price * 100)
+                    _log_debug(0, base, bias, "DRY_RUN", f"PnL {pnl:+.2f}% @ {current_px:.4f}",
+                               price=current_px, pnl=round(pnl, 2))
+            except:
+                pass
+            time.sleep(60)
+    else:
+        # LIVE: echter Watcher mit Exit-Engine
+        from watcher import Watcher, TrackedPosition
+        watcher = Watcher()
+        tracked = TrackedPosition(
+            symbol=symbol, side=bias.lower(),
+            entry_price=entry_price, stop_loss=stop_loss,
+            size=0,
+            steps=1, trailing_active=False, trailing_price=stop_loss,
+            entry_time=datetime.now(timezone.utc).isoformat(),
+            pattern_exit_done=False,
+        )
+        watcher.add_position(tracked)
 
-    # Mutable state — updated during watcher loop
-    current_step = 1
+        # Mutable state — updated during watcher loop
+        current_step = 1
 
-    while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
-        try:
-            sig = exit_engine.check(
-                symbol=symbol, side=bias.lower(),
-                entry_price=entry_price, stop_loss=tracked.stop_loss,
-                current_step=current_step,
-                trailing_active=tracked.trailing_active,
-                trailing_price=tracked.trailing_price,
-            )
+        while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
+            try:
+                sig = exit_engine.check(
+                    symbol=symbol, side=bias.lower(),
+                    entry_price=entry_price, stop_loss=tracked.stop_loss,
+                    current_step=current_step,
+                    trailing_active=tracked.trailing_active,
+                    trailing_price=tracked.trailing_price,
+                )
 
-            if sig.reason != ExitReason.NONE:
-                pct = int(sig.close_pct * 100)
-                pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
-                      else ((entry_price - sig.price) / entry_price * 100)
-                # ── Trade Log: EXIT ──
-                _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                           reason=sig.reason.value, close_pct=pct, pnl_pct=round(pnl, 2),
-                           price=sig.price, rsi=sig.rsi, session=name)
+                if sig.reason != ExitReason.NONE:
+                    pct = int(sig.close_pct * 100)
+                    pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
+                          else ((entry_price - sig.price) / entry_price * 100)
+                    _log_trade("exit", symbol=symbol, base=base, bias=bias,
+                               reason=sig.reason.value, close_pct=pct, pnl_pct=round(pnl, 2),
+                               price=sig.price, rsi=sig.rsi, session=name)
 
-                # Stufe 1: Pattern ODER Profit Lock (50% close)
-                if sig.reason in (ExitReason.PATTERN, ExitReason.PROFIT_LOCK):
-                    level = "1/3"
-                    exit_msg = (
-                        f"📤 {mode} EXIT {pct}% {bias} {base}\n"
-                        f"   Level:  {level} — {sig.reason.value}\n"
-                        f"   Preis:  {sig.price:.6f}\n"
-                        f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
-                        f"   Info:   {sig.message}\n"
-                        f"   → Rest läuft mit SL auf Break-Even + Trailing"
-                    )
-                    print(exit_msg); tg(exit_msg)
-
-                    # Update state — SL auf Break-Even, Trailing aktivieren, nächste Stufe
-                    tracked.stop_loss = entry_price
-                    tracked.trailing_active = True
-                    tracked.trailing_price = entry_price  # Starttrail = Break-Even
-                    tracked.pattern_exit_done = True
-                    current_step = 2
-                    watcher.add_position(tracked)  # Update im Watcher
-
-                    if not DRY_RUN:
+                    if sig.reason in (ExitReason.PATTERN, ExitReason.PROFIT_LOCK):
+                        level = "1/3"
+                        exit_msg = (
+                            f"📤 {mode} EXIT {pct}% {bias} {base}\n"
+                            f"   Level:  {level} — {sig.reason.value}\n"
+                            f"   Preis:  {sig.price:.6f}\n"
+                            f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
+                            f"   Info:   {sig.message}\n"
+                            f"   → Rest läuft mit SL auf Break-Even + Trailing"
+                        )
+                        print(exit_msg); tg(exit_msg)
+                        tracked.stop_loss = entry_price
+                        tracked.trailing_active = True
+                        tracked.trailing_price = entry_price
+                        tracked.pattern_exit_done = True
+                        current_step = 2
+                        watcher.add_position(tracked)
                         from trader import KrakenTrader
                         trader2 = KrakenTrader()
                         trader2.close_position(symbol, bias.lower(), close_pct=0.5)
                         trader2.set_stop_loss(symbol, bias.lower(), entry_price)
                         print(f"  → 50% geschlossen + SL auf Break-Even + Trailing aktiv: {entry_price:.6f}")
-                    else:
-                        print(f"  DRY RUN: 50% Close + SL auf Break-Even + Trailing ({entry_price:.6f})")
 
-                # Stufe 2: Strukturell (100% close) — inkl. Trailing-Hit
-                elif sig.reason in (ExitReason.EMA_OVEREXTENDED, ExitReason.SR_REACHED,
-                                     ExitReason.RSI_EXTREME, ExitReason.STOP_LOSS):
-                    level = "2/3"
-                    exit_msg = (
-                        f"📤 {mode} EXIT {pct}% {bias} {base}\n"
-                        f"   Level:  {level} — {sig.reason.value}\n"
-                        f"   Preis:  {sig.price:.6f}\n"
-                        f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
-                        f"   Info:   {sig.message}"
-                    )
-                    print(exit_msg); tg(exit_msg)
-
-                    # LIVE close
-                    if not DRY_RUN:
+                    elif sig.reason in (ExitReason.EMA_OVEREXTENDED, ExitReason.SR_REACHED,
+                                         ExitReason.RSI_EXTREME, ExitReason.STOP_LOSS):
+                        level = "2/3"
+                        exit_msg = (
+                            f"📤 {mode} EXIT {pct}% {bias} {base}\n"
+                            f"   Level:  {level} — {sig.reason.value}\n"
+                            f"   Preis:  {sig.price:.6f}\n"
+                            f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
+                            f"   Info:   {sig.message}"
+                        )
+                        print(exit_msg); tg(exit_msg)
                         from trader import KrakenTrader
                         trader2 = KrakenTrader()
                         trader2.close_position(symbol, bias.lower())
-                    entered = False  # Position komplett zu
-                    watcher.remove_position(symbol)
-                    break
-
-            else:
-                # Kein Exit → Trailing Stop updaten
-                if tracked.trailing_active:
-                    watcher.update_trailing(symbol, sig.price)
-                    pos = watcher.get_position(symbol)
-                    if pos:
-                        tracked.trailing_price = pos.trailing_price
-                    # Check ob Trailing getriggert
-                    if watcher.check_trailing_hit(symbol, sig.price):
-                        pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
-                              else ((entry_price - sig.price) / entry_price * 100)
-                        trail_msg = (
-                            f"📤 {mode} EXIT 100% {bias} {base}\n"
-                            f"   Level:  2/3 — Trailing Stop\n"
-                            f"   Preis:  {sig.price:.6f}\n"
-                            f"   PnL:    {pnl:+.2f}%\n"
-                            f"   Info:   Trailing getriggert @ {tracked.trailing_price:.6f}"
-                        )
-                        print(trail_msg); tg(trail_msg)
-                        if not DRY_RUN:
-                            from trader import KrakenTrader
-                            trader2 = KrakenTrader()
-                            trader2.close_position(symbol, bias.lower())
                         entered = False
                         watcher.remove_position(symbol)
                         break
 
-        except Exception as e:
-            print(f"  Watcher-Fehler: {e}")
+                else:
+                    if tracked.trailing_active:
+                        watcher.update_trailing(symbol, sig.price)
+                        pos = watcher.get_position(symbol)
+                        if pos:
+                            tracked.trailing_price = pos.trailing_price
+                        if watcher.check_trailing_hit(symbol, sig.price):
+                            pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
+                                  else ((entry_price - sig.price) / entry_price * 100)
+                            trail_msg = (
+                                f"📤 {mode} EXIT 100% {bias} {base}\n"
+                                f"   Level:  2/3 — Trailing Stop\n"
+                                f"   Preis:  {sig.price:.6f}\n"
+                                f"   PnL:    {pnl:+.2f}%\n"
+                                f"   Info:   Trailing getriggert @ {tracked.trailing_price:.6f}"
+                            )
+                            print(trail_msg); tg(trail_msg)
+                            from trader import KrakenTrader
+                            trader2 = KrakenTrader()
+                            trader2.close_position(symbol, bias.lower())
+                            entered = False
+                            watcher.remove_position(symbol)
+                            break
 
-        time.sleep(30)
+            except Exception as e:
+                print(f"  Watcher-Fehler: {e}")
 
-    # ─── Phase 4: Session End ────────────────────────────────────
+            time.sleep(30)
 
-    end_msg = f"📤 {mode} EXIT 100% {bias} {base}\n   Level:  3/3 — session_end\n   Info:   Session-Ende → Zwangsschluss"
+        # LIVE Session-Ende
+        if entered:
+            _log_trade("exit", symbol=symbol, base=base, bias=bias,
+                       reason="session_end", close_pct=100, pnl_pct=0,
+                       price=0, rsi=0, session=name)
+            end_msg = f"📤 {mode} EXIT 100% {bias} {base}\n   Level:  3/3 — session_end\n   Info:   Session-Ende → Zwangsschluss"
+            print(end_msg); tg(end_msg)
+            results = watcher.close_all_session_end()
+            if not results:
+                trader = KrakenTrader()
+                trader.close_position(symbol, bias.lower())
 
-    if entered:
-        _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                   reason="session_end", close_pct=100, pnl_pct=0,
-                   price=0, rsi=0, session=name)
-        print(end_msg); tg(end_msg)
-        # Use Watcher's session-end close (mit Cleanup-Logging)
-        results = watcher.close_all_session_end()
-        if not results and not DRY_RUN:
-            # Fallback wenn Watcher keine Position hat (z.B. Trader nicht gesetzt)
-            from trader import KrakenTrader
-            trader = KrakenTrader()
-            trader.close_position(symbol, bias.lower())
+    # ─── Session End (beide Modi) ────────────────────────────────
 
-    print(f"✅ [{name}] Session Ende — {_ts_str()}" + (" (1 Signal, dry run)" if entered else ""))
+    dry_label = " (1 Signal, dry run)" if entered and DRY_RUN else ""
+    print(f"✅ [{name}] Session Ende — {_ts_str()}{dry_label}")
     tg(f"✅ [{name}] Session Ende — {_ts_str()}")
 
     ENTRY_STATE_FILE.unlink(missing_ok=True)
