@@ -353,6 +353,9 @@ def main():
         # DRY RUN: kein echter Watcher — nur bis Session-Ende warten
         print(f"   DRY RUN: Position simuliert — Exit/TP/SL werden nicht getrackt")
         print(f"   Nächste Session: ~{close_dt.strftime('%H:%M')} UTC (Session-Ende)")
+        last_pnl_msg = 0
+        best_pnl = 0.0
+        exit_price_actual = entry_price
         while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
             try:
                 price_data = entry_engine._fetch_1m(symbol, limit=3)
@@ -362,9 +365,59 @@ def main():
                           else ((entry_price - current_px) / entry_price * 100)
                     _log_debug(0, base, bias, "DRY_RUN", f"PnL {pnl:+.2f}% @ {current_px:.4f}",
                                price=current_px, pnl=round(pnl, 2))
+                    # Simulierter Profit Lock bei +1% und bestehendem Hoch
+                    if pnl >= 1.0 and pnl > best_pnl:
+                        best_pnl = pnl
+                        exit_price_actual = current_px
+                        if time.time() - last_pnl_msg > 300:  # alle 5 Min
+                            print(f"   [{_ts_str()}] {base}: PnL {pnl:+.2f}% (best: {best_pnl:+.2f}%)")
+                            last_pnl_msg = time.time()
+                    # Simulierter SL (0.3% unter Entry)
+                    if pnl <= -0.3:
+                        exit_price_actual = current_px
+                        pnl_icon = "🔴"
+                        sl_msg = (
+                            f"📤 {mode} EXIT 100% {bias} {base}\n"
+                            f"   Level:  2/3 — stop_loss (simuliert)\n"
+                            f"   Entry:  ${entry_price:.6f}\n"
+                            f"   Exit:   ${current_px:.6f}\n"
+                            f"   PnL:    {pnl_icon} {pnl:+.2f}%\n"
+                            f"   Info:   DRY RUN SL getriggert"
+                        )
+                        print(sl_msg); tg(sl_msg)
+                        _log_trade("exit", symbol=symbol, base=base, bias=bias,
+                                   reason="stop_loss", close_pct=100, pnl_pct=round(pnl, 2),
+                                   price=current_px, rsi=0, session=name)
+                        entered = False
+                        break
             except:
                 pass
             time.sleep(60)
+
+        # Session-End: simulierten Exit senden falls noch offen
+        if entered:
+            try:
+                price_data = entry_engine._fetch_1m(symbol, limit=3)
+                if len(price_data) > 0:
+                    exit_price_actual = float(price_data[-1][4])
+                    pnl = ((exit_price_actual - entry_price) / entry_price * 100) if bias == "LONG" \
+                          else ((entry_price - exit_price_actual) / entry_price * 100)
+            except:
+                pass
+            pnl_icon = "🟢" if pnl >= 0 else "🔴"
+            exit_msg = (
+                f"📤 {mode} EXIT 100% {bias} {base}\n"
+                f"   Level:  3/3 — session_end\n"
+                f"   Entry:  ${entry_price:.6f}\n"
+                f"   Exit:   ${exit_price_actual:.6f}\n"
+                f"   PnL:    {pnl_icon} {pnl:+.2f}%\n"
+                f"   Info:   Session-Ende (DRY RUN)"
+            )
+            print(exit_msg); tg(exit_msg)
+            _log_trade("exit", symbol=symbol, base=base, bias=bias,
+                       reason="session_end", close_pct=100, pnl_pct=round(pnl, 2),
+                       price=exit_price_actual, rsi=0, session=name)
+            entered = False
     else:
         # LIVE: echter Watcher mit Exit-Engine
         from watcher import Watcher, TrackedPosition
