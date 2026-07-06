@@ -177,6 +177,47 @@ class EntryEngine:
                 return False, f"Preis {dist:+.2f}% über EMA20 — kein SHORT"
             return True, ""
 
+    # ─── RSI (Wilder's Smoothing) ──────────────────────────────
+
+    @staticmethod
+    def _rsi(closes: np.ndarray, period: int = 14) -> float:
+        if len(closes) < period + 1:
+            return 50.0
+        delta = np.diff(closes)
+        gain = np.where(delta > 0, delta, 0.0)
+        loss = np.where(delta < 0, -delta, 0.0)
+        avg_gain = float(np.mean(gain[:period]))
+        avg_loss = float(np.mean(loss[:period]))
+        for i in range(period, len(gain)):
+            avg_gain = (avg_gain * (period - 1) + gain[i]) / period
+            avg_loss = (avg_loss * (period - 1) + loss[i]) / period
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / max(avg_loss, 1e-10)
+        return 100.0 - (100.0 / (1.0 + rs))
+
+    # ─── SL-Prozent aus 1H ATR ────────────────────────────────
+
+    def _calc_sl_pct(self, symbol: str, price: float) -> float:
+        """Berechnet SL-Prozent: 0.75× 1H ATR, min 0.6%."""
+        atr_1h_pct = 0.0
+        try:
+            ex = self._get_exchange()
+            candles_1h = ex.fetch_ohlcv(symbol, timeframe="1h", limit=20)
+            if len(candles_1h) >= 3:
+                trs = []
+                for i in range(1, len(candles_1h)):
+                    h_i, l_i = candles_1h[i][2], candles_1h[i][3]
+                    c_prev = candles_1h[i-1][4]
+                    tr = max(h_i - l_i, abs(h_i - c_prev), abs(l_i - c_prev))
+                    trs.append(tr)
+                lookback = min(14, len(trs))
+                atr_1h = float(np.mean(trs[-lookback:]))
+                atr_1h_pct = (atr_1h / price * 100) if atr_1h > 0 and price > 0 else 0
+        except Exception:
+            pass
+        return max(atr_1h_pct * 0.75, 0.6)
+
     # ─── Hilfsfunktion: dynamische EMA-Max-Distanz ──────────────
 
     def _dynamic_max_dist(self, symbol: str, bias: str) -> float:
@@ -294,10 +335,29 @@ class EntryEngine:
             signal.state = EntryState.APPROACHING
             return signal
 
-        # Preis an der EMA → AT_EMA + Rejection-Prüfung
+        # Preis an der EMA → AT_EMA
         signal.state = EntryState.AT_EMA
 
-        # Rejection-Prüfung auf letzter Kerze
+        # ── Fast Entry: RSI neutral + richtige Seite → sofort Entry ──
+        # Keine Rejection nötig wenn Setup klar ist
+        rsi_val = self._rsi(closes)
+        rsi_ok = False
+        if bias == "LONG":
+            rsi_ok = 30 <= rsi_val <= 65
+        else:
+            rsi_ok = 35 <= rsi_val <= 70
+        if rsi_ok:
+            signal.entry_price = float(closes[-1])
+            sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
+            if bias == "LONG":
+                signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 6)
+            else:
+                signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 6)
+            signal.state = EntryState.ENTERED
+            signal.reasoning = f"Fast Entry: an EMA20 (RSI {rsi_val:.0f}, Dist {distance_pct:.2f}%)"
+            return signal
+
+        # Rejection-Prüfung auf letzter Kerze (für RSI-Extrem-Fälle)
         last_open  = float(opens[-1])
         last_high  = float(highs[-1])
         last_low   = float(lows[-1])
@@ -315,28 +375,11 @@ class EntryEngine:
                 rejection_vol = float(volumes[-2])
                 if rejection_vol >= avg_vol * 1.2:
                     signal.entry_price = last_close
-                    # 1H ATR für SL
-                    atr_1h_pct = 0.0
-                    try:
-                        ex = self._get_exchange()
-                        candles_1h = ex.fetch_ohlcv(symbol, timeframe="1h", limit=20)
-                        if len(candles_1h) >= 3:
-                            trs = []
-                            for i in range(1, len(candles_1h)):
-                                h_i, l_i = candles_1h[i][2], candles_1h[i][3]
-                                c_prev = candles_1h[i-1][4]
-                                tr = max(h_i - l_i, abs(h_i - c_prev), abs(l_i - c_prev))
-                                trs.append(tr)
-                            lookback = min(14, len(trs))
-                            atr_1h = float(np.mean(trs[-lookback:]))
-                            atr_1h_pct = (atr_1h / last_close * 100) if atr_1h > 0 and last_close > 0 else 0
-                    except Exception:
-                        pass
-                    sl_pct = max(atr_1h_pct * 0.75, 0.6)
+                    sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
                     if bias == "LONG":
-                        signal.stop_loss = round(last_close * (1 - sl_pct / 100), 6)
+                        signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 6)
                     else:
-                        signal.stop_loss = round(last_close * (1 + sl_pct / 100), 6)
+                        signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 6)
                     signal.state = EntryState.ENTERED
                     signal.reasoning = f"Pullback: Rejection an EMA ({distance_pct:.2f}%)"
                     return signal
