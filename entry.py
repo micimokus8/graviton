@@ -84,10 +84,10 @@ class EntryEngine:
             })
         return self._exchange
 
-    def _fetch_1m(self, symbol: str, limit: int = 50) -> np.ndarray:
-        """Fetch 1m OHLCV."""
+    def _fetch_1m(self, symbol: str, limit: int = 50, tf: str = "1m") -> np.ndarray:
+        """Fetch OHLCV. Default 1m, alternativ 5m."""
         ex = self._get_exchange()
-        candles = ex.fetch_ohlcv(symbol, timeframe="1m", limit=limit)
+        candles = ex.fetch_ohlcv(symbol, timeframe=tf, limit=limit)
         return np.array(candles, dtype=float)
 
     def _calc_ema(self, closes: np.ndarray, period: int = 20) -> np.ndarray:
@@ -357,39 +357,35 @@ class EntryEngine:
             signal.reasoning = f"Fast Entry: an EMA20 (RSI {rsi_val:.0f}, Dist {distance_pct:.2f}%)"
             return signal
 
-        # Rejection-Prüfung auf letzter Kerze (für RSI-Extrem-Fälle)
-        last_open  = float(opens[-1])
-        last_high  = float(highs[-1])
-        last_low   = float(lows[-1])
-        last_close = float(closes[-1])
+        # Rejection-Prüfung auf 5m Kerze (statt 1m — 1m zu verrauscht)
+        try:
+            data_5m = self._fetch_1m(symbol, limit=30, tf="5m")  # 5m data
+            o5, h5, l5, c5 = data_5m[:, 1], data_5m[:, 2], data_5m[:, 3], data_5m[:, 4]
+            v5 = data_5m[:, 5]
+            last_open5, last_high5 = float(o5[-1]), float(h5[-1])
+            last_low5, last_close5 = float(l5[-1]), float(c5[-1])
+            last_vol5 = float(v5[-1])
 
-        is_rejection = self._is_rejection_candle(
-            last_open, last_high, last_low, last_close,
-            current_ema, bias,
-        )
+            is_rejection = self._is_rejection_candle(
+                last_open5, last_high5, last_low5, last_close5,
+                current_ema, bias,
+            )
 
-        if is_rejection:
-            # ── Volumen-Confirmation ──
-            if len(volumes) >= 12:
-                avg_vol = float(np.mean(volumes[-12:-2]))
-                rejection_vol = float(volumes[-2])
-                if rejection_vol >= avg_vol * 1.2:
-                    signal.entry_price = last_close
-                    sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
-                    if bias == "LONG":
-                        signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 6)
-                    else:
-                        signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 6)
-                    signal.state = EntryState.ENTERED
-                    signal.reasoning = f"Pullback: Rejection an EMA ({distance_pct:.2f}%)"
-                    return signal
-                else:
-                    # Volumen zu niedrig → noch warten
-                    return signal
-            else:
-                # Zu wenig Daten → warten
-                return signal
-
+            if is_rejection:
+                if len(v5) >= 12:
+                    avg_vol = float(np.mean(v5[-12:-2]))
+                    if last_vol5 >= avg_vol * 1.2:
+                        signal.entry_price = last_close5
+                        sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
+                        if bias == "LONG":
+                            signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 6)
+                        else:
+                            signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 6)
+                        signal.state = EntryState.ENTERED
+                        signal.reasoning = f"Pullback: 5m Rejection an EMA ({distance_pct:.2f}%)"
+                        return signal
+        except Exception:
+            pass
         return signal
 
     # ─── Active Position Tracking ──────────────────────────────
