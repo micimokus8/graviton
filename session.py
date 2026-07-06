@@ -236,7 +236,9 @@ def main():
                 # Debug-Log pro Coin pro Cycle (nur File, kein Telegram)
                 state_name = signal.state.value if hasattr(signal.state, 'value') else str(signal.state)
                 reason = ""
-                if signal.state == EntryState.WAITING:
+                if signal.state == EntryState.NO_ENTRY:
+                    reason = signal.reasoning if signal.reasoning else "EMA-Position falsch"
+                elif signal.state == EntryState.WAITING:
                     reason = f"EMA-Distanz {signal.distance_pct:.2f}% > 1.5% (3× Basis)"
                 elif signal.state == EntryState.APPROACHING:
                     reason = f"EMA-Distanz {signal.distance_pct:.2f}% > dynamische Distanz"

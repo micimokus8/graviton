@@ -157,6 +157,26 @@ class EntryEngine:
 
         return False
 
+    # ─── EMA-Positions-Check: Preis muss auf richtiger Seite der EMA20 sein ──
+
+    @staticmethod
+    def _is_correct_side(price: float, ema20: float, bias: str) -> tuple[bool, str]:
+        """
+        Prüft ob Preis auf der richtigen EMA20-Seite ist.
+        LONG: Preis > EMA20 (mindestens 0.1%)
+        SHORT: Preis < EMA20 (mindestens 0.1%)
+        Returns (ok, reason)
+        """
+        dist = (price - ema20) / ema20 * 100 if ema20 > 0 else 0
+        if bias == "LONG":
+            if dist <= 0:
+                return False, f"Preis {dist:+.2f}% unter EMA20 — kein LONG"
+            return True, ""
+        else:  # SHORT
+            if dist >= 0:
+                return False, f"Preis {dist:+.2f}% über EMA20 — kein SHORT"
+            return True, ""
+
     # ─── Hilfsfunktion: dynamische EMA-Max-Distanz ──────────────
 
     def _dynamic_max_dist(self, symbol: str, bias: str) -> float:
@@ -231,6 +251,20 @@ class EntryEngine:
 
         # Distanz zur EMA
         distance_pct = abs(current_price - current_ema) / current_ema * 100
+
+        # EMA-Positions-Check: Preis muss auf richtiger Seite sein
+        side_ok, side_reason = self._is_correct_side(current_price, current_ema, bias)
+        if not side_ok:
+            signal = EntrySignal(
+                symbol=symbol, bias=bias, state=EntryState.NO_ENTRY,
+                price=round(current_price, 6), ema20=round(current_ema, 6),
+                distance_pct=round(distance_pct, 4),
+                rejection=False, rejection_high=0, rejection_low=0,
+                rejection_close=0, entry_price=0, stop_loss=0,
+                step=current_step, reasoning=side_reason,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            )
+            return signal
 
         # ─── State Machine ─────────────────────────────────────
 
