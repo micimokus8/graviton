@@ -298,7 +298,7 @@ class EntryEngine:
                             atr_1h_pct = (atr_1h / last_close * 100) if atr_1h > 0 and last_close > 0 else 0
                     except Exception:
                         pass
-                    sl_pct = max(atr_1h_pct * 0.3, 0.3)
+                    sl_pct = max(atr_1h_pct * 0.5, 0.5)
                     if bias == "LONG":
                         signal.stop_loss = round(last_close * (1 - sl_pct / 100), 6)
                     else:
