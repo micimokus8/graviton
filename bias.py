@@ -207,6 +207,27 @@ class BiasAnalyzer:
         except Exception:
             pass
 
+        # ── Intraday Momentum Check ──────────────────────────────
+        # Wenn heutiger Intraday-Pump den Daily-Trend überstimmt
+        try:
+            ex = self._get_exchange()
+            ticker = ex.fetch_ticker(symbol)
+            ticker_chg = float(ticker.get("percentage", 0) or 0)
+            ticker_open = float(ticker.get("open", 0) or 0)
+            current_price = float(ticker.get("last", 0) or 0)
+            if ticker_open > 0 and current_price > 0:
+                intraday_chg = (current_price - ticker_open) / ticker_open * 100
+            else:
+                intraday_chg = 0
+            if intraday_chg > 4.0 and daily_trend != "STRONG_UP":
+                daily_trend = "STRONG_UP"
+                daily_chg_pct = intraday_chg
+            elif intraday_chg < -4.0 and daily_trend != "STRONG_DOWN":
+                daily_trend = "STRONG_DOWN"
+                daily_chg_pct = intraday_chg
+        except Exception:
+            pass
+
         # ── 1H EMA20 Position Check ──────────────────────────────
         # Zusätzlicher Filter: Preis muss auf richtiger EMA20-Seite sein
         ema_position = "unknown"
