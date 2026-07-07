@@ -173,131 +173,52 @@ class BiasAnalyzer:
         all_closes_for_rsi = closes[:idx[-1] + 1] if len(closes) >= 14 else closes
         rsi_value = _rsi(all_closes_for_rsi)
 
-        # ── Daily Trend Context ──────────────────────────────────
-        # Coin der +6% auf 24h aber -0.3% in Session = LONG-Pullback, kein SHORT
-        daily_trend = "NEUTRAL"
-        daily_chg_pct = 0.0
-        try:
-            daily_data = self._fetch_ohlcv(symbol, timeframe="1d", limit=6)
-            if len(daily_data) >= 4:
-                d_closes = daily_data[:, 4]
-                d_close_yesterday = float(d_closes[-2])
-                d_close_2d = float(d_closes[-3])
-                d_close_3d = float(d_closes[-4])
-                daily_chg_pct = (d_close_yesterday - d_close_2d) / d_close_2d * 100
-                two_day_chg = (d_close_yesterday - d_close_3d) / d_close_3d * 100
-                if daily_chg_pct > 2.0 or two_day_chg > 4.0:
-                    daily_trend = "STRONG_UP"
-                elif daily_chg_pct < -2.0 or two_day_chg < -4.0:
-                    daily_trend = "STRONG_DOWN"
-            else:
-                # Fallback: Ticker percentage (wenn OHLCV fehlt)
-                try:
-                    ex = self._get_exchange()
-                    ticker = ex.fetch_ticker(symbol)
-                    ticker_chg = float(ticker.get("percentage", 0) or 0)
-                    if ticker_chg > 2.0:
-                        daily_trend = "STRONG_UP"
-                        daily_chg_pct = ticker_chg
-                    elif ticker_chg < -2.0:
-                        daily_trend = "STRONG_DOWN"
-                        daily_chg_pct = ticker_chg
-                except:
-                    pass
-        except Exception:
-            pass
+        # ── Session Momentum (PRIMARY) ─────────────────────────
+        # Was macht der Coin JETZT seit NY Open?
+        session_chg_pct = (current_price - session_open_price) / session_open_price * 100
+        session_vol_ratio = float(np.mean(volumes[idx])) / max(float(np.mean(volumes[-20:])), 0.001)
+        session_strong = abs(session_chg_pct) > 2.0 and session_vol_ratio > 1.5
 
-        # ── Intraday Momentum Check ──────────────────────────────
-        # Kein Überschreiben! Nur Konflikt-Erkennung.
-        # Daily DOWN + Intraday Pump = NOISE (könnte Reversal oder Bounce sein)
-        # Daily UP + Intraday Dump = NOISE (könnte Dip oder Reversal sein)
-        intraday_chg = 0.0
-        try:
-            ex = self._get_exchange()
-            ticker = ex.fetch_ticker(symbol)
-            ticker_open = float(ticker.get("open", 0) or 0)
-            ticker_last = float(ticker.get("last", 0) or 0)
-            if ticker_open > 0 and ticker_last > 0:
-                intraday_chg = (ticker_last - ticker_open) / ticker_open * 100
-        except Exception:
-            pass
-
-        # ── 1H EMA20 Position Check ──────────────────────────────
-        # Zusätzlicher Filter: Preis muss auf richtiger EMA20-Seite sein
+        # ── 1H EMA20 Position ─────────────────────────────────
         ema_position = "unknown"
         try:
             d1h = self._fetch_ohlcv(symbol, timeframe="1h", limit=25)
             if len(d1h) >= 20:
                 h_closes = d1h[:, 4]
-                # EMA20 manuell
                 alpha = 2.0 / 21.0
                 ema = float(h_closes[-1])
                 for v in reversed(h_closes[:-1]):
                     ema = alpha * float(v) + (1 - alpha) * ema
                 current_px_1h = float(h_closes[-1])
                 ema_dist = (current_px_1h - ema) / ema * 100
-                if ema_dist > 0.15:
-                    ema_position = "above"
-                elif ema_dist < -0.15:
-                    ema_position = "below"
-                else:
-                    ema_position = "on"
-        except Exception:
-            pass
+                if ema_dist > 0.15: ema_position = "above"
+                elif ema_dist < -0.15: ema_position = "below"
+                else: ema_position = "on"
+        except: pass
 
-        # ─── Bias-Logik (Daily-Trend-aware + EMA20 Position) ──────
-        bias = "NOISE"
-        reason = ""
-        rsi_blocked = False
+        # ── Bias-Logik (Session-first) ────────────────────────
+        bias = "NOISE"; reason = ""; rsi_blocked = False
 
-        session_chg_pct = (current_price - session_open_price) / session_open_price * 100
+        # ZEC heute: Session +3.9%, Volumen 2x → LONG Signal!
+        if session_strong:
+            direction = "LONG" if session_chg_pct > 0 else "SHORT"
+            if direction == "LONG" and rsi_value > rsi_long_max:
+                bias = "NOISE"; reason = f"Session +{session_chg_pct:.1f}% (Vol {session_vol_ratio:.1f}x) aber RSI {rsi_value:.0f} > {rsi_long_max}"
+            elif direction == "SHORT" and rsi_value < rsi_short_min:
+                bias = "NOISE"; reason = f"Session {session_chg_pct:.1f}% (Vol {session_vol_ratio:.1f}x) aber RSI {rsi_value:.0f} < {rsi_short_min}"
+            else:
+                bias = direction
+                reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x), {green}/{red} Kerzen → {direction}"
 
-        # EMA20 Filter: Preis muss auf richtiger Seite sein
-        ema_block = ""
-        if ema_position == "below" and daily_trend == "STRONG_UP":
-            ema_block = f", 1H EMA20: below"
-        elif ema_position == "above" and daily_trend == "STRONG_DOWN":
-            ema_block = f", 1H EMA20: above"
-        elif ema_position == "on":
-            ema_block = f", 1H EMA20: on (decision point)"
-
-        # Intraday-Konflikt: Daily DOWN + großer Intraday-Pump = NOISE
-        daily_intraday_conflict = False
-        if daily_trend == "STRONG_DOWN" and intraday_chg > 4.0:
-            daily_intraday_conflict = True
-            bias = "NOISE"; reason = f"Konflikt: Daily DOWN {daily_chg_pct:.1f}% aber Intraday +{intraday_chg:.1f}% — abwarten"
-        elif daily_trend == "STRONG_UP" and intraday_chg < -4.0:
-            daily_intraday_conflict = True
-            bias = "NOISE"; reason = f"Konflikt: Daily UP +{daily_chg_pct:.1f}% aber Intraday {intraday_chg:.1f}% — abwarten"
-
-        if not daily_intraday_conflict:
-            # Daily-Kontext: starker Trend + kleiner Session-Pullback = Continuation
-            if daily_trend == "STRONG_UP":
-                if ema_position == "below":
-                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, 1H below EMA20 — Trendbruch?"
-                elif rsi_value > rsi_long_max:
-                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, RSI {rsi_value:.0f} > {rsi_long_max} (überkauft)"
-                elif session_chg_pct < -2.0:
-                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session {session_chg_pct:.1f}% (Trendbruch?)"
-                elif red > green:
-                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session rot ({green}/{red}) — Pullback läuft"
-                else:
-                    bias = "LONG"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → LONG{ema_block}"
-
-            elif daily_trend == "STRONG_DOWN":
-                if ema_position == "above":
-                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, 1H above EMA20 — Trendbruch?"
-                elif rsi_value < rsi_short_min:
-                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, RSI {rsi_value:.0f} < {rsi_short_min} (überverkauft)"
-                elif session_chg_pct > 2.0:
-                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:.1f}% (Trendbruch?)"
-                elif green > red:
-                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session grün ({green}/{red}) — Bounce läuft"
-                else:
-                    bias = "SHORT"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → SHORT{ema_block}"
-
-            else:  # NEUTRAL daily → kein klarer Trend, kein Trade
-                reason = f"Daily NEUTRAL ({daily_chg_pct:+.1f}%) — kein klarer Trend, no trade"
+        # Schwaches Session-Signal → Daily Trend als Fallback
+        elif abs(session_chg_pct) > 1.0:
+            # Session 1-2%: Bias nur wenn Daily passt
+            direction = "LONG" if session_chg_pct > 0 else "SHORT"
+            bias = direction
+            reason = f"Session {session_chg_pct:+.1f}% (moderat), {green}/{red} Kerzen → {direction}"
+        else:
+            # Session < 1%: Daily Trend
+            reason = f"Session {session_chg_pct:+.1f}% — zu schwach, kein Trade"
 
         return BiasResult(
             symbol=symbol,
