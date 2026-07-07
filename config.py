@@ -52,7 +52,7 @@ ACTIVE_SESSIONS = ["ny"]
 
 SCAN = {
     "min_change_pct":  3.0,    # Runter von 4.0 — XMR (+3.7%) und XLM (-3.8%) sonst raus
-    "max_change_pct":  20.0,   # Hoch von 18.0 — TLM (-23%) sonst raus
+    "max_change_pct":  99.0,   # Deaktiviert — Futures Ticker abweichend vom Spot
     "min_volume_eur":  750_000,
     "max_watchlist":   8,
 }
