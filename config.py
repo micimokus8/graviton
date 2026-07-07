@@ -51,8 +51,8 @@ ACTIVE_SESSIONS = ["ny"]
 # ─── Scan ──────────────────────────────────────────────────────────
 
 SCAN = {
-    "min_change_pct":  4.0,
-    "max_change_pct":  18.0,
+    "min_change_pct":  3.0,    # Runter von 4.0 — XMR (+3.7%) und XLM (-3.8%) sonst raus
+    "max_change_pct":  20.0,   # Hoch von 18.0 — TLM (-23%) sonst raus
     "min_volume_eur":  750_000,
     "max_watchlist":   8,
 }
