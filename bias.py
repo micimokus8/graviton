@@ -206,6 +206,8 @@ class BiasAnalyzer:
                 bias = "NOISE"; reason = f"Daily UP aber RSI {rsi_value:.0f} > {rsi_long_max} (überkauft)"
             elif session_chg_pct < -2.0:
                 bias = "NOISE"; reason = f"Daily UP aber Session {session_chg_pct:.1f}% (Trendbruch?)"
+            elif red > green:
+                bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session rot ({green}/{red}) — Pullback läuft"
             else:
                 bias = "LONG"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → LONG"
 
@@ -214,6 +216,8 @@ class BiasAnalyzer:
                 bias = "NOISE"; reason = f"Daily DOWN aber RSI {rsi_value:.0f} < {rsi_short_min} (überverkauft)"
             elif session_chg_pct > 2.0:
                 bias = "NOISE"; reason = f"Daily DOWN aber Session {session_chg_pct:.1f}% (Trendbruch?)"
+            elif green > red:
+                bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session grün ({green}/{red}) — Bounce läuft"
             else:
                 bias = "SHORT"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → SHORT"
 
