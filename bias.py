@@ -127,6 +127,7 @@ class BiasAnalyzer:
         highs   = data[:, 2]
         lows    = data[:, 3]
         closes  = data[:, 4]
+        volumes = data[:, 5]
 
         # Finde Kerzen NACH session_open (mit 1s Toleranz gegen Float-Präzision)
         # Kraken OHLCV-Timestamps sind int Millisekunden, aber float64 → int cast
@@ -179,6 +180,15 @@ class BiasAnalyzer:
         session_vol_ratio = float(np.mean(volumes[idx])) / max(float(np.mean(volumes[-20:])), 0.001)
         session_strong = abs(session_chg_pct) > 2.0 and session_vol_ratio > 1.5
 
+        # ── Daily Trend Context (für elif-Fallback) ──────────────
+        daily_chg_pct = 0.0
+        try:
+            d_daily = self._fetch_ohlcv(symbol, timeframe="1d", limit=3)
+            if len(d_daily) >= 3:
+                daily_chg_pct = (float(d_daily[-2, 4]) - float(d_daily[-3, 4])) / max(float(d_daily[-3, 4]), 0.001) * 100
+        except:
+            pass
+
         # ── 1H EMA20 Position ─────────────────────────────────
         ema_position = "unknown"
         try:
@@ -186,8 +196,8 @@ class BiasAnalyzer:
             if len(d1h) >= 20:
                 h_closes = d1h[:, 4]
                 alpha = 2.0 / 21.0
-                ema = float(h_closes[-1])
-                for v in reversed(h_closes[:-1]):
+                ema = float(h_closes[0])  # Älteste als Seed
+                for v in h_closes[1:]:    # Vorwärts iterieren
                     ema = alpha * float(v) + (1 - alpha) * ema
                 current_px_1h = float(h_closes[-1])
                 ema_dist = (current_px_1h - ema) / ema * 100
@@ -199,7 +209,7 @@ class BiasAnalyzer:
         # ── Bias-Logik (Session-first) ────────────────────────
         bias = "NOISE"; reason = ""; rsi_blocked = False
 
-        # ZEC heute: Session +3.9%, Volumen 2x → LONG Signal!
+        # STRONG: Session >2% + Volumen >1.5x
         if session_strong:
             direction = "LONG" if session_chg_pct > 0 else "SHORT"
             if direction == "LONG" and rsi_value > rsi_long_max:
@@ -210,14 +220,20 @@ class BiasAnalyzer:
                 bias = direction
                 reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x), {green}/{red} Kerzen → {direction}"
 
-        # Schwaches Session-Signal → Daily Trend als Fallback
+        # MODERAT: Session 1-2% — nur wenn Daily bestätigt
         elif abs(session_chg_pct) > 1.0:
-            # Session 1-2%: Bias nur wenn Daily passt
             direction = "LONG" if session_chg_pct > 0 else "SHORT"
-            bias = direction
-            reason = f"Session {session_chg_pct:+.1f}% (moderat), {green}/{red} Kerzen → {direction}"
+            daily_aligned = (direction == "LONG" and daily_chg_pct > 0) or (direction == "SHORT" and daily_chg_pct < 0)
+            if daily_aligned:
+                bias = direction
+                reason = f"Session {session_chg_pct:+.1f}% (Daily {daily_chg_pct:+.1f}% aligned) → {direction}"
+            else:
+                bias = "NOISE"
+                reason = f"Session {session_chg_pct:+.1f}% aber Daily {daily_chg_pct:+.1f}% gegenläufig → NOISE"
+
+        # SCHWACH: Session <1% — kein Trade
         else:
-            # Session < 1%: Daily Trend
+            bias = "NOISE"
             reason = f"Session {session_chg_pct:+.1f}% — zu schwach, kein Trade"
 
         return BiasResult(
