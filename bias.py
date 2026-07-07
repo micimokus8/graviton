@@ -211,11 +211,15 @@ class BiasAnalyzer:
                 bias = direction
                 reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x), {green}/{red} Kerzen → {direction}"
 
-        # MODERAT: Session 1-2% — reine Session-Entscheidung
+        # MODERAT: Session 1-2% — Volumen muss Durchschnitt bestätigen
         elif abs(session_chg_pct) > 1.0:
             direction = "LONG" if session_chg_pct > 0 else "SHORT"
-            bias = direction
-            reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x), {green}/{red} Kerzen → {direction}"
+            if session_vol_ratio >= 0.8:
+                bias = direction
+                reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x), {green}/{red} Kerzen → {direction}"
+            else:
+                bias = "NOISE"
+                reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x) — Volumen zu niedrig"
 
         # SCHWACH: Session <1% — kein Trade
         else:
