@@ -374,8 +374,9 @@ def main():
                         if time.time() - last_pnl_msg > 300:  # alle 5 Min
                             print(f"   [{_ts_str()}] {base}: PnL {pnl:+.2f}% (best: {best_pnl:+.2f}%)")
                             last_pnl_msg = time.time()
-                    # Simulierter SL (0.3% unter Entry)
-                    if pnl <= -0.3:
+                    # Simulierter SL: echten SL aus entry.py nutzen (0.75× 1H ATR)
+                    sl_trigger = (current_px <= stop_loss) if bias == "LONG" else (current_px >= stop_loss)
+                    if sl_trigger:
                         exit_price_actual = current_px
                         pnl_icon = "🔴"
                         sl_msg = (
