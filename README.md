@@ -4,10 +4,10 @@
   <img src="GravitonLogo.png" alt="Graviton" width="200">
 </p>
 
-Graviton trades crypto perpetuals on Kraken by hunting momentum pullbacks
-to the EMA20. It scans for coins with strong intraday moves (4–18% / 24h),
-confirms directional bias from the first 15m candle after session open,
-then enters on 1m timeframe when price gravitates back to the EMA20 line.
+Graviton trades crypto perpetuals on Kraken by hunting momentum at
+the NY session open. It scans for coins with strong intraday moves (3%+ / 24h),
+determines directional bias from session-open momentum (first 15m candles),
+then enters on 1m timeframe when price touches the EMA20 line.
 
 - **Sessions:** NY (13:30–16:00 UTC) and Asia (00:00–02:00 UTC)
 - **Exchange:** Kraken Perpetuals via CCXT (308 USD linear perps)
@@ -23,17 +23,20 @@ Scan (30m before) → Bias (15m candle) → Entry (1m EMA20) → Exit (3 Levels)
 
 ### 1. Scan — Momentum Filter (30 min before session)
 
-- 24h Change: 4% – 18%
-- 24h Volume: > $750,000 USD
+- 24h Change: 3%+ (min 3%, no upper limit — Futures ticker differs from spot)
+- 24h Volume: > $750,000 USD (Ticker-based; OHLCV validation after volume filter)
 - Max 8 coins on watchlist
 - Sorted by abs(change) descending
 
-### 2. Bias — Directional Analysis (16 min after session open)
+### 2. Bias — Session Momentum (16 min after session open)
 
-- **1 closed 15m candle** → LONG / SHORT / NOISE
-- Daily trend context: strong daily trend + small session retrace = trend continuation bias
-- RSI guard: RSI > 80 blocks LONG, RSI < 20 blocks SHORT
-- Earlier bias (16 min vs 31 min) gives 15 min more entry time
+The bias is purely session-based — it measures what the coin does **right now** since NY open, not what happened yesterday.
+
+- **STRONG** (>2% session change + >1.5x average volume): Direction with RSI guard (RSI >80 blocks LONG, RSI <20 blocks SHORT)
+- **MODERATE** (1-2% session change + >0.8x average volume): Direction based on momentum
+- **WEAK** (<1% session change): NOISE — not enough movement to trade
+- Counts green vs red 15m candles in the first 3 candles after session open
+- No daily trend comparison — yesterday's candle is irrelevant for session-open momentum
 
 ### 3. Entry — 1m EMA20 Touch (during session)
 
@@ -43,13 +46,9 @@ Two entry modes, selected by RSI:
 
 **Rejection Entry (5m, RSI extreme):** Price touches EMA20 on 1m but RSI outside neutral range → waits for a **5m rejection candle** (green candle with low at EMA20 for LONG, red candle with high at EMA20 for SHORT) plus volume confirmation (>1.2x average). The 5m timeframe filters out single-wick noise and only accepts confirmed bounces.
 
-**Bias pre-filter (1H EMA20 side check):** Before any candidate enters polling, the bias checks where price sits relative to 1H EMA20:
-  - LONG only if price is **above** 1H EMA20 (EMA acts as support)
-  - SHORT only if price is **below** 1H EMA20 (EMA acts as resistance)
-  - Price **on** EMA20 → NOISE, no trade until a candle closes decisively on one side
-  - Daily trend + wrong EMA20 side → NOISE (trend break warning)
-
 Entry filters:
+- **1m EMA20 side check:** LONG only if price > 1m EMA20, SHORT only if price < 1m EMA20. Prevents entries on the wrong side of the micro-trend.
+- **1H EMA20 bias context:** shown in bias output for information (above/below/on), but does not block entry — the 1m EMA20 check is sufficient.
 - **Dynamic EMA distance:** Based on 24h coin change (<5% → 0.50%, 5-10% → 0.60%, >10% → 1.00%)
 - **Candidate rotation:** All non-S/R-blocked candidates polled in a 30s cycle — first with valid entry wins.
 - **S/R proximity:** If nearest S/R <0.5% away → fallback to best candidate if all blocked
