@@ -208,23 +208,17 @@ class BiasAnalyzer:
             pass
 
         # ── Intraday Momentum Check ──────────────────────────────
-        # Wenn heutiger Intraday-Pump den Daily-Trend überstimmt
+        # Kein Überschreiben! Nur Konflikt-Erkennung.
+        # Daily DOWN + Intraday Pump = NOISE (könnte Reversal oder Bounce sein)
+        # Daily UP + Intraday Dump = NOISE (könnte Dip oder Reversal sein)
+        intraday_chg = 0.0
         try:
             ex = self._get_exchange()
             ticker = ex.fetch_ticker(symbol)
-            ticker_chg = float(ticker.get("percentage", 0) or 0)
             ticker_open = float(ticker.get("open", 0) or 0)
-            current_price = float(ticker.get("last", 0) or 0)
-            if ticker_open > 0 and current_price > 0:
-                intraday_chg = (current_price - ticker_open) / ticker_open * 100
-            else:
-                intraday_chg = 0
-            if intraday_chg > 4.0 and daily_trend != "STRONG_UP":
-                daily_trend = "STRONG_UP"
-                daily_chg_pct = intraday_chg
-            elif intraday_chg < -4.0 and daily_trend != "STRONG_DOWN":
-                daily_trend = "STRONG_DOWN"
-                daily_chg_pct = intraday_chg
+            ticker_last = float(ticker.get("last", 0) or 0)
+            if ticker_open > 0 and ticker_last > 0:
+                intraday_chg = (ticker_last - ticker_open) / ticker_open * 100
         except Exception:
             pass
 
@@ -267,33 +261,43 @@ class BiasAnalyzer:
         elif ema_position == "on":
             ema_block = f", 1H EMA20: on (decision point)"
 
-        # Daily-Kontext: starker Trend + kleiner Session-Pullback = Continuation
-        if daily_trend == "STRONG_UP":
-            if ema_position == "below":
-                bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, 1H below EMA20 — Trendbruch?"
-            elif rsi_value > rsi_long_max:
-                bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, RSI {rsi_value:.0f} > {rsi_long_max} (überkauft)"
-            elif session_chg_pct < -2.0:
-                bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session {session_chg_pct:.1f}% (Trendbruch?)"
-            elif red > green:
-                bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session rot ({green}/{red}) — Pullback läuft"
-            else:
-                bias = "LONG"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → LONG{ema_block}"
+        # Intraday-Konflikt: Daily DOWN + großer Intraday-Pump = NOISE
+        daily_intraday_conflict = False
+        if daily_trend == "STRONG_DOWN" and intraday_chg > 4.0:
+            daily_intraday_conflict = True
+            bias = "NOISE"; reason = f"Konflikt: Daily DOWN {daily_chg_pct:.1f}% aber Intraday +{intraday_chg:.1f}% — abwarten"
+        elif daily_trend == "STRONG_UP" and intraday_chg < -4.0:
+            daily_intraday_conflict = True
+            bias = "NOISE"; reason = f"Konflikt: Daily UP +{daily_chg_pct:.1f}% aber Intraday {intraday_chg:.1f}% — abwarten"
 
-        elif daily_trend == "STRONG_DOWN":
-            if ema_position == "above":
-                bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, 1H above EMA20 — Trendbruch?"
-            elif rsi_value < rsi_short_min:
-                bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, RSI {rsi_value:.0f} < {rsi_short_min} (überverkauft)"
-            elif session_chg_pct > 2.0:
-                bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:.1f}% (Trendbruch?)"
-            elif green > red:
-                bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session grün ({green}/{red}) — Bounce läuft"
-            else:
-                bias = "SHORT"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → SHORT{ema_block}"
+        if not daily_intraday_conflict:
+            # Daily-Kontext: starker Trend + kleiner Session-Pullback = Continuation
+            if daily_trend == "STRONG_UP":
+                if ema_position == "below":
+                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, 1H below EMA20 — Trendbruch?"
+                elif rsi_value > rsi_long_max:
+                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, RSI {rsi_value:.0f} > {rsi_long_max} (überkauft)"
+                elif session_chg_pct < -2.0:
+                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session {session_chg_pct:.1f}% (Trendbruch?)"
+                elif red > green:
+                    bias = "NOISE"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session rot ({green}/{red}) — Pullback läuft"
+                else:
+                    bias = "LONG"; reason = f"Daily UP +{daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → LONG{ema_block}"
 
-        else:  # NEUTRAL daily → kein klarer Trend, kein Trade
-            reason = f"Daily NEUTRAL ({daily_chg_pct:+.1f}%) — kein klarer Trend, no trade"
+            elif daily_trend == "STRONG_DOWN":
+                if ema_position == "above":
+                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, 1H above EMA20 — Trendbruch?"
+                elif rsi_value < rsi_short_min:
+                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, RSI {rsi_value:.0f} < {rsi_short_min} (überverkauft)"
+                elif session_chg_pct > 2.0:
+                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:.1f}% (Trendbruch?)"
+                elif green > red:
+                    bias = "NOISE"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session grün ({green}/{red}) — Bounce läuft"
+                else:
+                    bias = "SHORT"; reason = f"Daily DOWN {daily_chg_pct:.1f}%, Session {session_chg_pct:+.1f}% → SHORT{ema_block}"
+
+            else:  # NEUTRAL daily → kein klarer Trend, kein Trade
+                reason = f"Daily NEUTRAL ({daily_chg_pct:+.1f}%) — kein klarer Trend, no trade"
 
         return BiasResult(
             symbol=symbol,
