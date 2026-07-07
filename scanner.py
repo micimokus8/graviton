@@ -152,6 +152,18 @@ class KrakenScanner:
                 continue
 
             change_pct = float(ticker.get("percentage", 0) or 0)
+            # OHLCV-Validierung: tägliche Kerzen für korrekte 24h Change
+            try:
+                daily = ex.fetch_ohlcv(sym, "1d", 3)
+                if len(daily) >= 2:
+                    # Geschlossene Tageskerze ([-2] = gestern)
+                    y_close = float(daily[-2][4])
+                    y_open = float(daily[-2][1])
+                    ohlcv_chg = (y_close - y_open) / y_open * 100
+                    # Überschreibe Ticker-Wert mit OHLCV-Wert
+                    change_pct = ohlcv_chg
+            except Exception:
+                pass  # Fallback auf Ticker-Wert
             abs_change = abs(change_pct)
 
             # Change-Filter: 4% – 18%
