@@ -180,15 +180,6 @@ class BiasAnalyzer:
         session_vol_ratio = float(np.mean(volumes[idx])) / max(float(np.mean(volumes[-20:])), 0.001)
         session_strong = abs(session_chg_pct) > 2.0 and session_vol_ratio > 1.5
 
-        # ── Daily Trend Context (für elif-Fallback) ──────────────
-        daily_chg_pct = 0.0
-        try:
-            d_daily = self._fetch_ohlcv(symbol, timeframe="1d", limit=3)
-            if len(d_daily) >= 3:
-                daily_chg_pct = (float(d_daily[-2, 4]) - float(d_daily[-3, 4])) / max(float(d_daily[-3, 4]), 0.001) * 100
-        except:
-            pass
-
         # ── 1H EMA20 Position ─────────────────────────────────
         ema_position = "unknown"
         try:
@@ -220,16 +211,11 @@ class BiasAnalyzer:
                 bias = direction
                 reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x), {green}/{red} Kerzen → {direction}"
 
-        # MODERAT: Session 1-2% — nur wenn Daily bestätigt
+        # MODERAT: Session 1-2% — reine Session-Entscheidung
         elif abs(session_chg_pct) > 1.0:
             direction = "LONG" if session_chg_pct > 0 else "SHORT"
-            daily_aligned = (direction == "LONG" and daily_chg_pct > 0) or (direction == "SHORT" and daily_chg_pct < 0)
-            if daily_aligned:
-                bias = direction
-                reason = f"Session {session_chg_pct:+.1f}% (Daily {daily_chg_pct:+.1f}% aligned) → {direction}"
-            else:
-                bias = "NOISE"
-                reason = f"Session {session_chg_pct:+.1f}% aber Daily {daily_chg_pct:+.1f}% gegenläufig → NOISE"
+            bias = direction
+            reason = f"Session {session_chg_pct:+.1f}% (Vol {session_vol_ratio:.1f}x), {green}/{red} Kerzen → {direction}"
 
         # SCHWACH: Session <1% — kein Trade
         else:
