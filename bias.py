@@ -181,16 +181,29 @@ class BiasAnalyzer:
             daily_data = self._fetch_ohlcv(symbol, timeframe="1d", limit=6)
             if len(daily_data) >= 4:
                 d_closes = daily_data[:, 4]
-                # GESCHLOSSENE Tageskerzen ([-1] = heute, noch offen!)
-                d_close_yesterday = float(d_closes[-2])  # gestern, geschlossen
-                d_close_2d = float(d_closes[-3])          # vorgestern
-                d_close_3d = float(d_closes[-4])          # vorvorgestern
+                d_close_yesterday = float(d_closes[-2])
+                d_close_2d = float(d_closes[-3])
+                d_close_3d = float(d_closes[-4])
                 daily_chg_pct = (d_close_yesterday - d_close_2d) / d_close_2d * 100
                 two_day_chg = (d_close_yesterday - d_close_3d) / d_close_3d * 100
                 if daily_chg_pct > 2.0 or two_day_chg > 4.0:
                     daily_trend = "STRONG_UP"
                 elif daily_chg_pct < -2.0 or two_day_chg < -4.0:
                     daily_trend = "STRONG_DOWN"
+            else:
+                # Fallback: Ticker percentage (wenn OHLCV fehlt)
+                try:
+                    ex = self._get_exchange()
+                    ticker = ex.fetch_ticker(symbol)
+                    ticker_chg = float(ticker.get("percentage", 0) or 0)
+                    if ticker_chg > 2.0:
+                        daily_trend = "STRONG_UP"
+                        daily_chg_pct = ticker_chg
+                    elif ticker_chg < -2.0:
+                        daily_trend = "STRONG_DOWN"
+                        daily_chg_pct = ticker_chg
+                except:
+                    pass
         except Exception:
             pass
 
