@@ -39,15 +39,20 @@ Scan (30m before) → Bias (15m candle) → Entry (1m EMA20) → Exit (3 Levels)
 
 Two entry modes, selected by RSI:
 
-**Fast Entry (RSI neutral):** Price touches EMA20 + RSI 30-65 (LONG) / 35-70 (SHORT) → **immediate entry.** No rejection candle required. The neutral RSI confirms the trend has room to run.
+**Fast Entry (1m, RSI neutral):** Price touches EMA20 on 1m chart + RSI 30-65 (LONG) / 35-70 (SHORT) → **immediate entry.** No rejection candle required. Catches momentum moves before they accelerate away from EMA.
 
-**Rejection Entry (RSI extreme):** Price touches EMA20 + RSI outside neutral range → waits for a rejection candle (green candle with low at EMA20 for LONG, red candle with high at EMA20 for SHORT) plus volume confirmation (>1.2x average).
+**Rejection Entry (5m, RSI extreme):** Price touches EMA20 on 1m but RSI outside neutral range → waits for a **5m rejection candle** (green candle with low at EMA20 for LONG, red candle with high at EMA20 for SHORT) plus volume confirmation (>1.2x average). The 5m timeframe filters out single-wick noise and only accepts confirmed bounces.
+
+**Bias pre-filter (1H EMA20 side check):** Before any candidate enters polling, the bias checks where price sits relative to 1H EMA20:
+  - LONG only if price is **above** 1H EMA20 (EMA acts as support)
+  - SHORT only if price is **below** 1H EMA20 (EMA acts as resistance)
+  - Price **on** EMA20 → NOISE, no trade until a candle closes decisively on one side
+  - Daily trend + wrong EMA20 side → NOISE (trend break warning)
 
 Entry filters:
-- **EMA side check:** LONG only if price > EMA20, SHORT only if price < EMA20. Prevents trading against the micro-trend.
 - **Dynamic EMA distance:** Based on 24h coin change (<5% → 0.50%, 5-10% → 0.60%, >10% → 1.00%)
-- **Candidate rotation:** All non-S/R-blocked candidates are polled in a 30s cycle — first with a valid entry wins.
-- **S/R proximity:** If nearest S/R is <0.5% away → fallback to best candidate if all blocked.
+- **Candidate rotation:** All non-S/R-blocked candidates polled in a 30s cycle — first with valid entry wins.
+- **S/R proximity:** If nearest S/R <0.5% away → fallback to best candidate if all blocked
 - **SL: 0.75× 1H ATR** (min 0.6%) — dynamic per coin volatility
 - 1 position per session, ~$100 (17.5% of equity)
 
