@@ -174,7 +174,7 @@ class BiasAnalyzer:
         # ── Bias-Logik (reine Session-Entscheidung) ────────────
         vol_note = f"(Vol {session_vol_ratio:.1f}x, stark)" if session_vol_ratio > 1.5 else f"(Vol {session_vol_ratio:.1f}x)"
 
-        if session_chg_pct > 0.5:
+        if session_chg_pct >= 0.5:
             return BiasResult(
                 symbol=symbol, bias="LONG",
                 session_open_price=session_open_price,
@@ -186,7 +186,7 @@ class BiasAnalyzer:
                 reason=f"Session +{session_chg_pct:.1f}% {vol_note} | {green}/{n} grün"
             )
 
-        elif session_chg_pct < -0.5:
+        elif session_chg_pct <= -0.5:
             return BiasResult(
                 symbol=symbol, bias="SHORT",
                 session_open_price=session_open_price,
