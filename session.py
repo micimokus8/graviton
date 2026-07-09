@@ -152,7 +152,7 @@ def main():
             bias_results.append({
                 "symbol": r.symbol, "base": w["base"],
                 "bias": r.bias, "price": r.session_open_price,
-                "rsi": r.rsi_15m, "reason": r.reason,
+                "rsi": r.session_chg_pct, "reason": r.reason,
                 "green": r.green_candles, "red": r.red_candles,
             })
         except Exception as e:

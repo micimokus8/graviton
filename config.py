@@ -61,9 +61,9 @@ SCAN = {
 
 BIAS = {
     "timeframe":      "15m",
-    "min_candles":    2,          # min 2 geschlossene Kerzen nach Session-Open
-    "rsi_long_max":   80,         # RSI > 80 bei LONG-Bias → skip
-    "rsi_short_min":  20,         # RSI < 20 bei SHORT-Bias → skip
+    "min_candles":    4,           # 4 Kerzen = 1h Daten (v2)
+    "rsi_long_max":   80,          # wird nur noch vom Entry-Check genutzt
+    "rsi_short_min":  20,
 }
 
 # ─── Entry ─────────────────────────────────────────────────────────
