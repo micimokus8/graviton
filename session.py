@@ -152,7 +152,7 @@ def main():
             bias_results.append({
                 "symbol": r.symbol, "base": w["base"],
                 "bias": r.bias, "price": r.session_open_price,
-                "rsi": r.session_chg_pct, "reason": r.reason,
+                "rsi": 0, "reason": r.reason,
                 "green": r.green_candles, "red": r.red_candles,
             })
         except Exception as e:
@@ -164,7 +164,7 @@ def main():
     bias_lines = [f"🧠 [{name}] Bias:"]
     for r in bias_results:
         icon = {"LONG": "🟢", "SHORT": "🔴", "NOISE": "⚪", "ERROR": "⚠️"}.get(r["bias"], "⚪")
-        bias_lines.append(f"  {icon} {r['base']}: {r['bias']} | RSI {r['rsi']}")
+        bias_lines.append(f"  {icon} {r['base']}: {r['bias']} | {r['reason']}")
     bias_lines.append(f"  → {len(candidates)} Kandidaten, {len(bias_results) - len(candidates)} verworfen")
     bias_msg = "\n".join(bias_lines)
     print(bias_msg); tg(bias_msg)
