@@ -338,23 +338,17 @@ class EntryEngine:
         # Preis an der EMA → AT_EMA
         signal.state = EntryState.AT_EMA
 
-        # ── Fast Entry: 5m RSI neutral + 1H RSI Guard → sofort Entry ──
-        # 1m RSI ist zu verrauscht — 5m für Trend, 1H für Kontext
+        # ── Fast Entry: 5m RSI neutral → sofort Entry ──
+        # 1m RSI zu verrauscht, 1H RSI blockt Momentum-Trades (DEXE +5% ignoriert)
         rsi_ok = False
         try:
             data_5m = self._fetch_1m(symbol, limit=50, tf="5m")
             closes_5m = data_5m[:, 4]
             rsi_5m = self._rsi(closes_5m)
-
-            # 1H RSI Guard (überkauft/überverkauft)
-            data_1h = self._fetch_1m(symbol, limit=30, tf="1h")
-            closes_1h = data_1h[:, 4]
-            rsi_1h = self._rsi(closes_1h)
-
             if bias == "LONG":
-                rsi_ok = 30 <= rsi_5m <= 65 and rsi_1h <= 65
-            else:  # SHORT
-                rsi_ok = 35 <= rsi_5m <= 70 and rsi_1h >= 35
+                rsi_ok = 30 <= rsi_5m <= 65
+            else:
+                rsi_ok = 35 <= rsi_5m <= 70
         except Exception:
             pass
         if rsi_ok:
@@ -365,7 +359,7 @@ class EntryEngine:
             else:
                 signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 6)
             signal.state = EntryState.ENTERED
-            signal.reasoning = f"Fast Entry: an EMA20 (5m RSI {rsi_5m:.0f}, 1H RSI {rsi_1h:.0f}, Dist {distance_pct:.2f}%)"
+            signal.reasoning = f"Fast Entry: an EMA20 (5m RSI {rsi_5m:.0f}, Dist {distance_pct:.2f}%)"
             return signal
 
         # Rejection-Prüfung auf 5m Kerze (statt 1m — 1m zu verrauscht)
