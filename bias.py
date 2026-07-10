@@ -106,7 +106,7 @@ class BiasAnalyzer:
             BiasResult mit bias = LONG/SHORT/NOISE
         """
         cfg = CFG.bias
-        min_candles = 4  # fester Wert: 4 Kerzen = 1h Daten
+        min_candles = 3  # 3 Kerzen = 45min, 4. schließt genau wenn Bot startet → Timing-Konflikt
 
         # Fetch 15m candles (genug für 6 Session-Kerzen + Baseline)
         data = self._fetch_ohlcv(symbol, timeframe="15m", limit=40)
