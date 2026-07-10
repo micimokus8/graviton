@@ -147,6 +147,11 @@ class KrakenScanner:
 
         for market in markets:
             sym = market["symbol"]
+            base = market.get("base", "")
+
+            # Non-crypto blocklist: stock index perps auf Kraken Futures
+            if base.upper() in ("CRCLX", "CRR", "US500", "NAS100", "US100", "JP225", "UK100", "AU200", "EU50"):
+                continue
             ticker = all_tickers.get(sym)
             if ticker is None:
                 continue
