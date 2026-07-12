@@ -355,9 +355,9 @@ class EntryEngine:
             signal.entry_price = float(closes[-1])
             sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
             if bias == "LONG":
-                signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 6)
+                signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 8)
             else:
-                signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 6)
+                signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 8)
             signal.state = EntryState.ENTERED
             signal.reasoning = f"Fast Entry: an EMA20 (5m RSI {rsi_5m:.0f}, Dist {distance_pct:.2f}%)"
             return signal
@@ -383,9 +383,9 @@ class EntryEngine:
                         signal.entry_price = last_close5
                         sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
                         if bias == "LONG":
-                            signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 6)
+                            signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 8)
                         else:
-                            signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 6)
+                            signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 8)
                         signal.state = EntryState.ENTERED
                         signal.reasoning = f"Pullback: 5m Rejection an EMA ({distance_pct:.2f}%)"
                         return signal
