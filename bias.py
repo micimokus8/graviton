@@ -1,180 +1,198 @@
 #!/usr/bin/env python3
 """
-graviton/bias.py — Graviton Bias v2
-====================================
-Session-Momenton basiert. Keine Compound-Checks.
+graviton/bias.py — Graviton Bias v3 (Multi-Timeframe)
+=====================================================
+Bewertet pro Coin 4H / 1H / 15m:
+  - EMA-Position (Preis vs EMA9 vs EMA20)
+  - Letzte 3 Kerzen (rising/falling)
+  → BULLISH / BEARISH / NEUTRAL
 
-Alt vs Neu:
-  • 3 Kerzen → 6 Kerzen (1.5h statt 45min)
-  • Compound-Checks raus (highs_rising, lows_falling, green_candles)
-  • Bias nur aus Session Net Move (0.5% Schwelle)
-  • Volumen: Block unter 0.5x, Info über 0.5x
-  • RSI im Bias entfernt (bleibt nur im Entry-Check auf 1m)
+Signal nur wenn 2 von 3 Timeframes übereinstimmen.
+Session-Change als Info, nicht als Entscheidung.
+
+v2 → v3 Änderungen:
+  • Entfernt: Session-Change als Entscheidungskriterium
+  • Neu:     Multi-Timeframe-Check (2/3 Rule)
+  • Neu:     4H OHLCV Fetch
+  • Neu:     _ema() Methode für EMA9 + EMA20
+  • Neu:     _tf_signal() für pro-Timeframe-Bewertung
+  • Behalten: min_candles, Volumen-Info
+
+Usage:
+  analyzer = BiasAnalyzer()
+  result = analyzer.analyze("BTC/USD:USD", session_open_ts)
+  print(result.bias, result.reason)
 """
 
-from __future__ import annotations
-import ccxt
-import numpy as np
-from typing import Optional, List
-from dataclasses import dataclass
+from typing import List, Optional
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import numpy as np
+import ccxt
 
-from config import CFG
 
+# ─── BiasResult ──────────────────────────────────────────────────────
 
 @dataclass
 class BiasResult:
-    """Ergebnis der Bias-Analyse für einen Coin."""
     symbol: str
-    bias: str                # "LONG", "SHORT", "NOISE"
-    session_open_price: float
-    current_price: float
-    session_chg_pct: float
-    session_vol_ratio: float
-    candles_analyzed: int
-    green_candles: int
-    red_candles: int
+    bias: str  # LONG / SHORT / NOISE
+    session_open_price: float = 0.0
+    current_price: float = 0.0
+    session_chg_pct: float = 0.0
+    session_vol_ratio: float = 0.0
+    candles_analyzed: int = 0
+    green_candles: int = 0
+    red_candles: int = 0
     reason: str = ""
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════
-
-def _rsi(close: np.ndarray, period: int = 14) -> float:
-    """Wilder's RSI (EMA-Smoothing)."""
-    if len(close) < period + 1:
-        return 50.0
-    delta = np.diff(close)
-    gain = np.where(delta > 0, delta, 0.0)
-    loss = np.where(delta < 0, -delta, 0.0)
-    avg_gain = np.mean(gain[:period])
-    avg_loss = np.mean(loss[:period])
-    for i in range(period, len(gain)):
-        avg_gain = (avg_gain * (period - 1) + gain[i]) / period
-        avg_loss = (avg_loss * (period - 1) + loss[i]) / period
-    if avg_loss == 0:
-        return 100.0
-    return 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Bias Engine v2
-# ═══════════════════════════════════════════════════════════════════
+# ─── BiasAnalyzer ────────────────────────────────────────────────────
 
 class BiasAnalyzer:
-    """
-    Session-Momenton Bias Engine.
-
-    Regeln (mittlere Variante):
-      1. session_chg >  +0.5% + vol > 0.5x → LONG
-      2. session_chg <  −0.5% + vol > 0.5x → SHORT
-      3. Sonst → NOISE
-    """
 
     def __init__(self):
         self._exchange: Optional[ccxt.Exchange] = None
+        self._config_loaded = False
+        self._load_config()
+
+    def _load_config(self):
+        """Lazy-load config (import late to avoid circular dep)."""
+        if not self._config_loaded:
+            from config import CFG
+            self._cfg = CFG
+            self._config_loaded = True
 
     def _get_exchange(self) -> ccxt.Exchange:
         if self._exchange is None:
             self._exchange = ccxt.krakenfutures({
-                "enableRateLimit": True,
-                "options": {"defaultType": "swap"},
+                'enableRateLimit': True,
+                'options': {'defaultType': 'swap'},
             })
         return self._exchange
 
-    def _fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 40) -> np.ndarray:
-        """Fetch OHLCV als numpy array [timestamp, open, high, low, close, volume]."""
+    def _fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 40):
+        """Fetch OHLCV with minimal error handling."""
         ex = self._get_exchange()
         try:
-            candles = ex.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-            if not candles:
-                raise ValueError("Keine Kerzen erhalten")
-            return np.array(candles, dtype=float)
-        except Exception as e:
-            raise RuntimeError(f"OHLCV fetch failed for {symbol}: {e}")
+            raw = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
+            if not raw:
+                return np.array([])
+            return np.array(raw, dtype=np.float64)
+        except Exception:
+            return np.array([])
+
+    @staticmethod
+    def _ema(closes: np.ndarray, period: int) -> np.ndarray:
+        """Exponential Moving Average."""
+        if len(closes) < period:
+            return np.full_like(closes, np.nan)
+        alpha = 2.0 / (period + 1)
+        ema = np.full_like(closes, np.nan)
+        ema[period - 1] = float(np.mean(closes[:period]))
+        for i in range(period, len(closes)):
+            ema[i] = alpha * float(closes[i]) + (1 - alpha) * ema[i - 1]
+        return ema
+
+    def _tf_signal(self, symbol: str, timeframe: str) -> dict:
+        """
+        Bewertet einen Timeframe: BULLISH / BEARISH / NEUTRAL.
+        Gibt dict mit signal + details für reason-String zurück.
+        """
+        data = self._fetch_ohlcv(symbol, timeframe, limit=60)
+        if len(data) < 25:
+            return {"signal": "NEUTRAL", "detail": "zu wenig Daten"}
+
+        closes = data[:, 4]
+        price = float(closes[-1])
+
+        ema9_arr = self._ema(closes, 9)
+        ema20_arr = self._ema(closes, 20)
+
+        ema9 = ema9_arr[-1]
+        ema20 = ema20_arr[-1]
+
+        if np.isnan(ema9) or np.isnan(ema20):
+            return {"signal": "NEUTRAL", "detail": "EMA nicht berechenbar"}
+
+        # Letzte 3 Closes: Richtung
+        last_3 = closes[-3:]
+        rising = bool(all(last_3[i] < last_3[i + 1] for i in range(2)))
+        falling = bool(all(last_3[i] > last_3[i + 1] for i in range(2)))
+
+        # BULLISH: Preis über EMA9 oder EMA-Cross bullish + Momentum
+        if price > ema9 and ema9 > ema20:
+            return {"signal": "BULLISH", "detail": f"P>{ema9:.4g}>{ema20:.4g}"}
+        if ema9 > ema20 and rising:
+            return {"signal": "BULLISH", "detail": f"EMA bullish, M{(ema20):.4g}"}
+
+        # BEARISH: Preis unter EMA9 oder EMA-Cross bearish + Momentum
+        if price < ema9 and ema9 < ema20:
+            return {"signal": "BEARISH", "detail": f"P<{ema9:.4g}<{ema20:.4g}"}
+        if ema9 < ema20 and falling:
+            return {"signal": "BEARISH", "detail": f"EMA bearish, M{(ema20):.4g}"}
+
+        return {"signal": "NEUTRAL", "detail": "weder bullisch noch bärisch"}
+
+    # ────────────────────────────────────────────────────────────────
 
     def analyze(self, symbol: str, session_open_ts: int) -> BiasResult:
         """
-        Hauptanalyse für einen Coin.
+        Haupt-Methode: Multi-Timeframe Bias.
 
-        Args:
-            symbol: CCXT Symbol (z.B. "BTC/USD:USD")
-            session_open_ts: Unix-Timestamp des Session-Open (UTC, ms)
-
-        Returns:
-            BiasResult mit bias = LONG/SHORT/NOISE
+        1. Fetch 15m Session-Daten (für Info: Change, Volumen, Kerzen)
+        2. Bewerte 4H / 1H / 15m Timeframes
+        3. 2-von-3 Regel → LONG / SHORT / NOISE
         """
-        cfg = CFG.bias
-        min_candles = 2  # 2 Kerzen = 30min, Bias kann 15:45 DE laufen
+        self._load_config()
 
-        # Fetch 15m candles (genug für 6 Session-Kerzen + Baseline)
+        # ── 15m Session-Daten (für Session-Change-Info) ──────────
         data = self._fetch_ohlcv(symbol, timeframe="15m", limit=40)
-
-        timestamps = data[:, 0].astype(int)
-        opens   = data[:, 1]
-        highs   = data[:, 2]
-        lows    = data[:, 3]
-        closes  = data[:, 4]
-        volumes = data[:, 5]
-
-        # ── Session-Kerzen identifizieren ───────────────────────
-        session_candles_mask = timestamps >= (session_open_ts - 1000)
-        session_indices = np.where(session_candles_mask)[0]
-
-        if len(session_indices) < min_candles:
-            first_open = float(opens[session_indices[0]]) if len(session_indices) > 0 else 0.0
+        if len(data) < 6:
             return BiasResult(
-                symbol=symbol,
-                bias="NOISE",
-                session_open_price=first_open,
-                current_price=first_open,
-                session_chg_pct=0.0,
-                session_vol_ratio=0.0,
-                candles_analyzed=len(session_indices),
-                green_candles=0, red_candles=0,
-                reason=f"Zu wenig Kerzen ({len(session_indices)} < {min_candles})"
+                symbol=symbol, bias="NOISE",
+                reason=f"Zu wenig Kerzen ({len(data)} < 6)"
             )
 
-        # ── Erste 6 Kerzen nach Open ────────────────────────────
-        n = min(6, len(session_indices))
-        idx = session_indices[:n]
+        timestamps = data[:, 0].astype(int)
+        opens = data[:, 1]
+        closes = data[:, 4]
+        volumes = data[:, 5]
 
-        session_open_price = float(opens[idx[0]])
-        session_closes = closes[idx]
+        session_indices = np.where(timestamps >= session_open_ts)[0]
+        n = len(session_indices)
+        idx = session_indices
 
-        # Grün/Rot zählen (Info only — kein Bias-Filter mehr)
-        green = sum(1 for i in range(n) if session_closes[i] > opens[idx[i]])
-        red = n - green
-
-        current_price = float(closes[idx[-1]])
-
-        # ── Session Momentum ────────────────────────────────────
+        session_open_price = float(opens[idx[0]]) if n > 0 else float(closes[-1])
+        current_price = float(closes[-1])
         session_chg_pct = (current_price - session_open_price) / session_open_price * 100
 
-        # ── Volumen-Ratio ───────────────────────────────────────
-        avg_session_vol = float(np.mean(volumes[idx]))
+        # Volumen-Info
+        avg_session_vol = float(np.mean(volumes[idx])) if n > 0 else 0
         avg_baseline_vol = max(float(np.mean(volumes[-20:])), 0.001)
         session_vol_ratio = avg_session_vol / avg_baseline_vol
 
-        # ── Volumen-Block (unter 0.3x = zu dünn) ───────────────
-        if 0 < session_vol_ratio < 0.3:
-            return BiasResult(
-                symbol=symbol,
-                bias="NOISE",
-                session_open_price=session_open_price,
-                current_price=current_price,
-                session_chg_pct=session_chg_pct,
-                session_vol_ratio=session_vol_ratio,
-                candles_analyzed=n,
-                green_candles=green, red_candles=red,
-                reason=f"Session {session_chg_pct:+.1f}%, Vol {session_vol_ratio:.1f}x — zu dünn"
-            )
+        green = sum(1 for i in range(n) if closes[idx[i]] > opens[idx[i]])
+        red = n - green
 
-        # ── Bias-Logik (reine Session-Entscheidung) ────────────
-        vol_note = f"(Vol {session_vol_ratio:.1f}x, stark)" if session_vol_ratio > 1.5 else f"(Vol {session_vol_ratio:.1f}x)"
+        # ── Multi-Timeframe Bewertung ────────────────────────────
+        tf_15m = self._tf_signal(symbol, "15m")
+        tf_1h = self._tf_signal(symbol, "1h")
+        tf_4h = self._tf_signal(symbol, "4h")
 
-        if session_chg_pct >= 0.3:
+        signals_list = [tf_15m["signal"], tf_1h["signal"], tf_4h["signal"]]
+        bullish = signals_list.count("BULLISH")
+        bearish = signals_list.count("BEARISH")
+        neutral = signals_list.count("NEUTRAL")
+
+        # Signal-Details für Reason
+        tf_detail = f"4H:{tf_4h['signal']} 1H:{tf_1h['signal']} 15m:{tf_15m['signal']}"
+
+        # Volumen-Info
+        vol_note = f"(Vol {session_vol_ratio:.1f}x)" if session_vol_ratio > 0 else ""
+
+        # ── 2-von-3 Regel ────────────────────────────────────────
+        if bullish >= 2:
             return BiasResult(
                 symbol=symbol, bias="LONG",
                 session_open_price=session_open_price,
@@ -183,10 +201,10 @@ class BiasAnalyzer:
                 session_vol_ratio=session_vol_ratio,
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
-                reason=f"Session +{session_chg_pct:.1f}% {vol_note} | {green}/{n} grün"
+                reason=f"LONG ({bullish}/3) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
             )
 
-        elif session_chg_pct <= -0.5:
+        if bearish >= 2:
             return BiasResult(
                 symbol=symbol, bias="SHORT",
                 session_open_price=session_open_price,
@@ -195,25 +213,23 @@ class BiasAnalyzer:
                 session_vol_ratio=session_vol_ratio,
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
-                reason=f"Session {session_chg_pct:.1f}% {vol_note} | {red}/{n} rot"
+                reason=f"SHORT ({bearish}/3) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
             )
 
-        else:
-            return BiasResult(
-                symbol=symbol, bias="NOISE",
-                session_open_price=session_open_price,
-                current_price=current_price,
-                session_chg_pct=session_chg_pct,
-                session_vol_ratio=session_vol_ratio,
-                candles_analyzed=n,
-                green_candles=green, red_candles=red,
-                reason=f"Session {session_chg_pct:+.1f}% — zu flach (< 0.5%)"
-            )
+        # Kein Konsens: NOISE
+        return BiasResult(
+            symbol=symbol, bias="NOISE",
+            session_open_price=session_open_price,
+            current_price=current_price,
+            session_chg_pct=session_chg_pct,
+            session_vol_ratio=session_vol_ratio,
+            candles_analyzed=n,
+            green_candles=green, red_candles=red,
+            reason=f"NOISE ({bullish}B/{bearish}S/{neutral}N) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
+        )
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Convenience
-# ═══════════════════════════════════════════════════════════════════
+# ─── analyze_watchlist (Interface für Cron) ─────────────────────────
 
 def analyze_watchlist(
     symbols: List[str],
@@ -229,3 +245,14 @@ def analyze_watchlist(
         except Exception as e:
             print(f"  {sym}: ERROR — {e}")
     return results
+
+
+# ─── CLI-Test ────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    # Python -m bias <symbol> [session_open_ts]
+    import sys
+    sym = sys.argv[1] if len(sys.argv) > 1 else "ZEC/USD:USD"
+    ts = int(sys.argv[2]) if len(sys.argv) > 2 else int(datetime.now(timezone.utc).timestamp() * 1000) - 7200_000
+    r = BiasAnalyzer().analyze(sym, ts)
+    print(f"{r.bias} {r.symbol} | {r.reason}")
