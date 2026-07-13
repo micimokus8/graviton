@@ -157,8 +157,8 @@ class BiasAnalyzer:
         avg_baseline_vol = max(float(np.mean(volumes[-20:])), 0.001)
         session_vol_ratio = avg_session_vol / avg_baseline_vol
 
-        # ── Volumen-Block (unter 0.5x) ─────────────────────────
-        if session_vol_ratio < 0.5:
+        # ── Volumen-Block (unter 0.3x = zu dünn) ───────────────
+        if 0 < session_vol_ratio < 0.3:
             return BiasResult(
                 symbol=symbol,
                 bias="NOISE",
@@ -174,7 +174,7 @@ class BiasAnalyzer:
         # ── Bias-Logik (reine Session-Entscheidung) ────────────
         vol_note = f"(Vol {session_vol_ratio:.1f}x, stark)" if session_vol_ratio > 1.5 else f"(Vol {session_vol_ratio:.1f}x)"
 
-        if session_chg_pct >= 0.5:
+        if session_chg_pct >= 0.3:
             return BiasResult(
                 symbol=symbol, bias="LONG",
                 session_open_price=session_open_price,

@@ -26,6 +26,7 @@ from telegram_sender import send as tg
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 WATCHLIST_FILE = DATA_DIR / "watchlist.json"
+BIAS_RESULT_FILE = DATA_DIR / "bias_result.json"
 ENTRY_STATE_FILE = DATA_DIR / "entry_state.json"
 TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
 DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
@@ -131,32 +132,16 @@ def main():
     bases = [w["base"] for w in watchlist]
     print(f"[{_ts_str()}] Watchlist: {len(watchlist)} Coins — {', '.join(bases)}")
 
-    # ─── Phase 1: Bias ───────────────────────────────────────────
+    # ─── Phase 1: Bias (aus Cron-Ergebnis, KEINE Doppelberechnung) ───
 
-    session_open_ts = int(open_dt.timestamp() * 1000)
-    # Früherer Bias: 16 Min statt 31 Min (1 × 15m Kerze + 1 Min Puffer)
-    # So haben wir 15 Minuten mehr Zeit für Entry-Polling
-    bias_time = open_dt + timedelta(minutes=16)
+    bias_file = BIAS_RESULT_FILE
+    if not bias_file.exists():
+        msg = f"⚠️ [{name}] Kein Bias-File — Cron lief nicht?"
+        print(msg); tg(msg)
+        return
 
-    wait_s = (bias_time - datetime.now(timezone.utc)).total_seconds()
-    if wait_s > 0:
-        time.sleep(wait_s)
-
-    print(f"[{_ts_str()}] Bias-Analyse...")
-    analyzer = BiasAnalyzer()
-    bias_results = []
-
-    for w in watchlist:
-        try:
-            r = analyzer.analyze(w["symbol"], session_open_ts)
-            bias_results.append({
-                "symbol": r.symbol, "base": w["base"],
-                "bias": r.bias, "price": r.session_open_price,
-                "rsi": 0, "reason": r.reason,
-                "green": r.green_candles, "red": r.red_candles,
-            })
-        except Exception as e:
-            print(f"  ✗ {w['base']}: Bias-Fehler — {e}")
+    with open(bias_file) as f:
+        bias_results = json.load(f)
 
     candidates = [r for r in bias_results if r["bias"] in ("LONG", "SHORT")]
 
@@ -164,7 +149,7 @@ def main():
     bias_lines = [f"🧠 [{name}] Bias:"]
     for r in bias_results:
         icon = {"LONG": "🟢", "SHORT": "🔴", "NOISE": "⚪", "ERROR": "⚠️"}.get(r["bias"], "⚪")
-        bias_lines.append(f"  {icon} {r['base']}: {r['bias']} | {r['reason']}")
+        bias_lines.append(f"  {icon} {r['symbol'].split('/')[0]}: {r['bias']} | {r['reason']}")
     bias_lines.append(f"  → {len(candidates)} Kandidaten, {len(bias_results) - len(candidates)} verworfen")
     bias_msg = "\n".join(bias_lines)
     print(bias_msg); tg(bias_msg)
