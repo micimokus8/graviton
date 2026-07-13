@@ -219,14 +219,13 @@ def analyze_watchlist(
     symbols: List[str],
     session_open_ts: int,
 ) -> List[BiasResult]:
-    """Analysiert Bias für eine Liste von Coins."""
+    """Analysiert Bias für eine Liste von Coins (ohne Print — Cron macht Output)."""
     analyzer = BiasAnalyzer()
     results = []
     for sym in symbols:
         try:
             result = analyzer.analyze(sym, session_open_ts)
             results.append(result)
-            print(f"  {sym}: {result.bias} — {result.reason}")
         except Exception as e:
             print(f"  {sym}: ERROR — {e}")
     return results
