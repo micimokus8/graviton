@@ -44,6 +44,7 @@ class BiasResult:
     candles_analyzed: int = 0
     green_candles: int = 0
     red_candles: int = 0
+    signal_count: int = 0  # 3 = 3/3, 2 = 2/3, 0 = NOISE
     reason: str = ""
 
 
@@ -191,6 +192,8 @@ class BiasAnalyzer:
         # Volumen-Info
         vol_note = f"(Vol {session_vol_ratio:.1f}x)" if session_vol_ratio > 0 else ""
 
+        signal_count = max(bullish, bearish)  # 3 = 3/3, 2 = 2/3
+
         # ── 2-von-3 Regel ────────────────────────────────────────
         if bullish >= 2:
             return BiasResult(
@@ -201,6 +204,7 @@ class BiasAnalyzer:
                 session_vol_ratio=session_vol_ratio,
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
+                signal_count=signal_count,
                 reason=f"LONG ({bullish}/3) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
             )
 
@@ -213,6 +217,7 @@ class BiasAnalyzer:
                 session_vol_ratio=session_vol_ratio,
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
+                signal_count=signal_count,
                 reason=f"SHORT ({bearish}/3) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
             )
 
@@ -225,6 +230,7 @@ class BiasAnalyzer:
             session_vol_ratio=session_vol_ratio,
             candles_analyzed=n,
             green_candles=green, red_candles=red,
+            signal_count=0,
             reason=f"NOISE ({bullish}B/{bearish}S/{neutral}N) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
         )
 

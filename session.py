@@ -190,6 +190,17 @@ def main():
         else:
             active_candidates.append(cand)
 
+    # Priorität: 3/3 Signale zuerst, 2/3 als Fallback
+    if active_candidates:
+        priority = [c for c in active_candidates if c.get('signal_count', 0) >= 3]
+        fallback = [c for c in active_candidates if c.get('signal_count', 0) == 2]
+        if priority:
+            print(f"   Priorität ({len(priority)}× 3/3): {', '.join(c['base'] for c in priority)}")
+            print(f"   Fallback ({len(fallback)}× 2/3): {', '.join(c['base'] for c in fallback)}")
+            active_candidates = priority + fallback  # 3/3 zuerst, dann 2/3
+        else:
+            print(f"   Kein 3/3 — alle {len(fallback)}× 2/3 aktiv")
+
     # Fallback: wenn alle durch S/R blockiert → nimm den mit der größten Distanz
     if not active_candidates and blocked_candidates:
         blocked_candidates.sort(key=lambda x: -x[0])  # größte Distanz zuerst
