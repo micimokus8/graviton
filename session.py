@@ -201,8 +201,8 @@ def main():
         priority = [c for c in active_candidates if c.get('signal_count', 0) >= 3]
         fallback = [c for c in active_candidates if c.get('signal_count', 0) == 2]
         if priority:
-            print(f"   Priorität ({len(priority)}× 3/3): {', '.join(c['base'] for c in priority)}")
-            print(f"   Fallback ({len(fallback)}× 2/3): {', '.join(c['base'] for c in fallback)}")
+            print(f"   Priorität ({len(priority)}× 3/3): {', '.join(_base(c) for c in priority)}")
+            print(f"   Fallback ({len(fallback)}× 2/3): {', '.join(_base(c) for c in fallback)}")
             active_candidates = priority + fallback  # 3/3 zuerst, dann 2/3
         else:
             print(f"   Kein 3/3 — alle {len(fallback)}× 2/3 aktiv")
@@ -211,8 +211,8 @@ def main():
     if not active_candidates and blocked_candidates:
         blocked_candidates.sort(key=lambda x: -x[0])  # größte Distanz zuerst
         fallback = blocked_candidates[0][1]
-        print(f"⚠️ Alle Kandidaten S/R-geblockt — Fallback: {fallback['base']} ({blocked_candidates[0][0]:.2f}% Distanz)")
-        tg(f"⚠️ [{name}] Alle S/R-geblockt — Fallback {fallback['base']} ({blocked_candidates[0][0]:.2f}%)")
+        print(f"⚠️ Alle Kandidaten S/R-geblockt — Fallback: {_base(fallback)} ({blocked_candidates[0][0]:.2f}% Distanz)")
+        tg(f"⚠️ [{name}] Alle S/R-geblockt — Fallback {_base(fallback)} ({blocked_candidates[0][0]:.2f}%)")
         active_candidates.append(fallback)
 
     if not active_candidates:
@@ -220,7 +220,7 @@ def main():
         print(msg); tg(msg)
         return
 
-    bases = [c["base"] for c in active_candidates]
+    bases = [_base(c) for c in active_candidates]
     print(f"👁 [{name}] Entry-Polling — {len(active_candidates)} Kandidaten: {', '.join(bases)}")
     print(f"   Rotiere alle 30s — erster mit Pullback gewinnt")
 
@@ -230,7 +230,7 @@ def main():
         for cand in active_candidates:
             symbol = cand["symbol"]
             bias = cand["bias"]
-            base = cand["base"]
+            base = _base(cand)
 
             try:
                 signal = entry_engine.check_entry(symbol, bias, current_step=1)
@@ -342,7 +342,7 @@ def main():
             msg += f"   {r}\n"
         print(msg); tg(msg)
         _log_debug(cycle, "SESSION", "END", "NO_ENTRY", f"{len(active_candidates)} Coins, {cycle} Cycles",
-                   candidates=[c["base"] for c in active_candidates])
+                   candidates=[_base(c) for c in active_candidates])
 
     # ─── Phase 3: Watcher (mit Trailing-Stop) ────────────────────
 
