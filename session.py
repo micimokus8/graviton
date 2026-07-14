@@ -32,6 +32,12 @@ TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
 DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
 
 
+
+
+def _base(cand: dict) -> str:
+    """Extrahiert Base aus Symbol ('CRV/USD:USD' → 'CRV')."""
+    return cand.get("base") or cand["symbol"].split("/")[0]
+
 def _log_trade(event: str, **kwargs):
     """Trade-Event in JSONL loggen."""
     entry = {"timestamp": datetime.now(timezone.utc).isoformat(), "event": event, **kwargs}
@@ -185,7 +191,7 @@ def main():
                     sr_dist = (cand["price"] - sup) / cand["price"] * 100 if sup else 0
             except:
                 sr_dist = 0
-            print(f"🚫 {cand['base']}: S/R-Block — {reason}")
+            print(f"🚫 {_base(cand)}: S/R-Block — {reason}")
             blocked_candidates.append((sr_dist, cand))
         else:
             active_candidates.append(cand)
@@ -322,15 +328,15 @@ def main():
             try:
                 sig = entry_engine.check_entry(cand["symbol"], cand["bias"])
                 if sig.state == EntryState.WAITING:
-                    summary_reasons.append(f"{cand['base']}: {sig.distance_pct:.1f}% von EMA (zu weit)")
+                    summary_reasons.append(f"{_base(cand)}: {sig.distance_pct:.1f}% von EMA (zu weit)")
                 elif sig.state == EntryState.APPROACHING:
-                    summary_reasons.append(f"{cand['base']}: {sig.distance_pct:.1f}% von EMA (nähert sich)")
+                    summary_reasons.append(f"{_base(cand)}: {sig.distance_pct:.1f}% von EMA (nähert sich)")
                 elif sig.state == EntryState.AT_EMA:
-                    summary_reasons.append(f"{cand['base']}: an EMA — keine Rejection")
+                    summary_reasons.append(f"{_base(cand)}: an EMA — keine Rejection")
                 else:
-                    summary_reasons.append(f"{cand['base']}: {sig.state}")
+                    summary_reasons.append(f"{_base(cand)}: {sig.state}")
             except Exception as e:
-                summary_reasons.append(f"{cand['base']}: Fehler — {e}")
+                summary_reasons.append(f"{_base(cand)}: Fehler — {e}")
         msg = f"⏱ [{name}] Kein Entry — {len(active_candidates)} Coins geprüft, {cycle} Cycles\n"
         for r in summary_reasons:
             msg += f"   {r}\n"
