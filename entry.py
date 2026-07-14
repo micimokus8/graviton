@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-graviton/entry.py — EMA20 Pullback Entry (1m Chart)
+graviton/entry.py — EMA20 Pullback Entry (5m Chart)
 =====================================================
-Wartet auf den Pullback zur EMA20 auf dem 1m-Chart.
+Wartet auf den Pullback zur EMA20 auf dem 5m-Chart.
 Entry-Logik:
 
   LONG:
@@ -225,9 +225,9 @@ class EntryEngine:
         EMA-Distanz basierend auf 24h-Change des Coins.
         Je stärker der Move, desto weiter die erlaubte Distanz.
 
-        daily_move < 5%   → 0.30% (enger Pullback)
-        daily_move 5-10%  → 0.60% (moderat)
-        daily_move > 10%  → 1.00% (weiter — Momentum-Tag)
+        daily_move < 5%   → 0.50% (enger Pullback)
+        daily_move 5-10%  → 1.00% (moderat)
+        daily_move > 10%  → 1.50% (weiter — Momentum-Tag)
         """
         base_dist = CFG.entry["ema_distance_max"]
         try:
@@ -277,8 +277,8 @@ class EntryEngine:
                 step=current_step, timestamp="",
             )
 
-        # Fetch 1m Daten
-        data = self._fetch_1m(symbol, limit=60)
+        # Fetch 5m Daten
+        data = self._fetch_1m(symbol, limit=60, tf="5m")
         closes  = data[:, 4]
         highs   = data[:, 2]
         lows    = data[:, 3]
