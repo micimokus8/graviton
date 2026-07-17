@@ -123,17 +123,96 @@ class BiasAnalyzer:
 
         # BULLISH: Preis über EMA9 oder EMA-Cross bullish + Momentum
         if price > ema9 and ema9 > ema20:
-            return {"signal": "BULLISH", "detail": f"P>{ema9:.4g}>{ema20:.4g}"}
-        if ema9 > ema20 and rising:
-            return {"signal": "BULLISH", "detail": f"EMA bullish, M{(ema20):.4g}"}
-
+            signal = "BULLISH"
+            detail = f"P>{ema9:.4g}>{ema20:.4g}"
+        elif ema9 > ema20 and rising:
+            signal = "BULLISH"
+            detail = f"EMA bullish, M{(ema20):.4g}"
         # BEARISH: Preis unter EMA9 oder EMA-Cross bearish + Momentum
-        if price < ema9 and ema9 < ema20:
-            return {"signal": "BEARISH", "detail": f"P<{ema9:.4g}<{ema20:.4g}"}
-        if ema9 < ema20 and falling:
-            return {"signal": "BEARISH", "detail": f"EMA bearish, M{(ema20):.4g}"}
+        elif price < ema9 and ema9 < ema20:
+            signal = "BEARISH"
+            detail = f"P<{ema9:.4g}<{ema20:.4g}"
+        elif ema9 < ema20 and falling:
+            signal = "BEARISH"
+            detail = f"EMA bearish, M{(ema20):.4g}"
+        else:
+            signal = "NEUTRAL"
+            detail = "weder bullisch noch bärisch"
 
-        return {"signal": "NEUTRAL", "detail": "weder bullisch noch bärisch"}
+        # ── 4H Trend-Frische-Check ──────────────────────────────
+        # Erschöpfte Trends (≥16h alt, Umkehrsignale) zählen nicht
+        if timeframe == "4h" and signal in ("BULLISH", "BEARISH"):
+            exhausted, ex_reason = self._check_4h_exhaustion(data)
+            if exhausted:
+                return {"signal": "NEUTRAL", "detail": f"{signal} → STALE ({ex_reason})"}
+
+        return {"signal": signal, "detail": detail}
+
+    def _check_4h_exhaustion(self, data: np.ndarray) -> tuple[bool, str]:
+        """
+        Prüft ob der 4H Trend erschöpft ist (alt + Umkehrsignale).
+        Returns (exhausted, reason).
+        """
+        if len(data) < 4:
+            return False, "zu wenig Daten"
+
+        closes = data[:, 4]
+        highs = data[:, 2]
+        lows = data[:, 3]
+
+        ema9 = self._ema(closes, 9)
+        ema20 = self._ema(closes, 20)
+
+        if np.isnan(ema9[-1]) or np.isnan(ema20[-1]):
+            return False, "EMA NaN"
+
+        # Count consecutive aligned candles (rückwärts)
+        aligned = 0
+        direction = None
+        for i in range(len(data) - 1, -1, -1):
+            if np.isnan(ema9[i]) or np.isnan(ema20[i]):
+                break
+            p, e9, e20 = closes[i], ema9[i], ema20[i]
+            if p > e9 > e20:
+                d = "LONG"
+            elif p < e9 < e20:
+                d = "SHORT"
+            else:
+                break
+            if direction is None:
+                direction = d
+            if d == direction:
+                aligned += 1
+            else:
+                break
+
+        # Trend jünger als 4 Kerzen (16h) → frisch genug
+        if aligned < 4:
+            return False, f"Trend {aligned} candles, frisch"
+
+        if direction == "SHORT":
+            # Prüfe 1: Schluss in oberer Hälfte der letzten 4h Kerze
+            last = data[-1]
+            rng = last[2] - last[3]
+            if rng > 0:
+                upper_half = last[3] + rng * 0.5
+                if last[4] > upper_half:
+                    return True, f"SHORT {aligned}c·Schluss obere Hälfte"
+            # Prüfe 2: Letzte 2 4h Tiefs steigen (höhere Tiefs)
+            if len(lows) >= 3 and lows[-1] > lows[-2]:
+                return True, f"SHORT {aligned}c·höhere Tiefs"
+
+        if direction == "LONG":
+            last = data[-1]
+            rng = last[2] - last[3]
+            if rng > 0:
+                lower_half = last[3] + rng * 0.5
+                if last[4] < lower_half:
+                    return True, f"LONG {aligned}c·Schluss untere Hälfte"
+            if len(highs) >= 3 and highs[-1] < highs[-2]:
+                return True, f"LONG {aligned}c·niedrigere Hochs"
+
+        return False, f"Trend {aligned}c, kein Erschöpfungsmuster"
 
     # ────────────────────────────────────────────────────────────────
 
