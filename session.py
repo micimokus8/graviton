@@ -354,12 +354,15 @@ def main():
     print(f"[{_ts_str()}] Watcher aktiv — überwache {base} {bias}...")
 
     if DRY_RUN:
-        # DRY RUN: kein echter Watcher — nur bis Session-Ende warten
-        print(f"   DRY RUN: Position simuliert — Exit/TP/SL werden nicht getrackt")
+        # DRY RUN: simulierter 2-Stufen-Exit (Profit Lock bei +1%, dann Break-Even)
+        print(f"   DRY RUN: 2-Stufen-Exit simuliert — 50% bei +1%, Rest Break-Even")
         print(f"   Nächste Session: ~{close_dt.strftime('%H:%M')} UTC (Session-Ende)")
         last_pnl_msg = 0
         best_pnl = 0.0
-        exit_price_actual = entry_price
+        half_closed = False          # Stage 1: 50% bei +1% PnL
+        remaining_stop = stop_loss   # Stop für den (verbleibenden) Teil
+        total_pnl = 0.0              # gewichteter Gesamt-PnL über beide Teile
+
         while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
             try:
                 price_data = entry_engine._fetch_1m(symbol, limit=3)
@@ -369,29 +372,54 @@ def main():
                           else ((entry_price - current_px) / entry_price * 100)
                     _log_debug(0, base, bias, "DRY_RUN", f"PnL {pnl:+.2f}% @ {current_px:.4f}",
                                price=current_px, pnl=round(pnl, 2))
-                    # Simulierter Profit Lock bei +1% und bestehendem Hoch
-                    if pnl >= 1.0 and pnl > best_pnl:
+
+                    # PnL-Update alle 5 Min
+                    if pnl > best_pnl:
                         best_pnl = pnl
-                        exit_price_actual = current_px
-                        if time.time() - last_pnl_msg > 300:  # alle 5 Min
-                            print(f"   [{_ts_str()}] {base}: PnL {pnl:+.2f}% (best: {best_pnl:+.2f}%)")
-                            last_pnl_msg = time.time()
-                    # Simulierter SL: echten SL aus entry.py nutzen (0.75× 1H ATR)
-                    sl_trigger = (current_px <= stop_loss) if bias == "LONG" else (current_px >= stop_loss)
-                    if sl_trigger:
-                        exit_price_actual = current_px
-                        pnl_icon = "🔴"
-                        sl_msg = (
-                            f"📤 {mode} EXIT 100% {bias} {base}\n"
-                            f"   Level:  2/3 — stop_loss (simuliert)\n"
+                    if time.time() - last_pnl_msg > 300:
+                        print(f"   [{_ts_str()}] {base}: PnL {pnl:+.2f}% (best: {best_pnl:+.2f}%)")
+                        last_pnl_msg = time.time()
+
+                    # ── Stage 1: Profit Lock bei +1%, nur einmal ──
+                    if not half_closed and pnl >= 1.0:
+                        half_closed = True
+                        remaining_stop = entry_price  # Break-Even für den Rest
+                        lock_msg = (
+                            f"📤 {mode} EXIT 50% {bias} {base}\n"
+                            f"   Level:  1/3 — profit_lock (simuliert)\n"
                             f"   Entry:  ${entry_price:.6f}\n"
                             f"   Exit:   ${current_px:.6f}\n"
-                            f"   PnL:    {pnl_icon} {pnl:+.2f}%\n"
-                            f"   Info:   DRY RUN SL getriggert"
+                            f"   PnL:    🟢 {pnl:+.2f}%\n"
+                            f"   Info:   50% gesichert, Rest → SL auf Break-Even"
+                        )
+                        print(lock_msg); tg(lock_msg)
+                        _log_trade("exit", symbol=symbol, base=base, bias=bias,
+                                   reason="profit_lock", close_pct=50, pnl_pct=round(pnl, 2),
+                                   price=current_px, rsi=0, session=name)
+                        total_pnl += pnl * 0.5   # erste Hälfte fix verbucht
+
+                    # ── Stop-Check: nutzt Break-Even nach Profit-Lock, sonst Original-SL ──
+                    active_stop = remaining_stop if half_closed else stop_loss
+                    sl_trigger = (current_px <= active_stop) if bias == "LONG" else (current_px >= active_stop)
+                    if sl_trigger:
+                        rest_pct = 50 if half_closed else 100
+                        rest_pnl = ((current_px - entry_price) / entry_price * 100) if bias == "LONG" \
+                                   else ((entry_price - current_px) / entry_price * 100)
+                        total_pnl += rest_pnl * (rest_pct / 100)
+                        pnl_icon = "🟢" if rest_pnl >= 0 else "🔴"
+                        reason_label = "breakeven_stop" if half_closed else "stop_loss"
+                        sl_msg = (
+                            f"📤 {mode} EXIT {rest_pct}% {bias} {base}\n"
+                            f"   Level:  2/3 — {reason_label} (simuliert)\n"
+                            f"   Entry:  ${entry_price:.6f}\n"
+                            f"   Exit:   ${current_px:.6f}\n"
+                            f"   PnL:    {pnl_icon} {rest_pnl:+.2f}% (Rest-Anteil)\n"
+                            f"   Gesamt-PnL Trade: {total_pnl:+.2f}%\n"
+                            f"   Info:   DRY RUN {'Break-Even-Stop' if half_closed else 'SL'} getriggert"
                         )
                         print(sl_msg); tg(sl_msg)
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                                   reason="stop_loss", close_pct=100, pnl_pct=round(pnl, 2),
+                                   reason=reason_label, close_pct=rest_pct, pnl_pct=round(rest_pnl, 2),
                                    price=current_px, rsi=0, session=name)
                         entered = False
                         break
@@ -399,7 +427,7 @@ def main():
                 pass
             time.sleep(60)
 
-        # Session-End: simulierten Exit senden falls noch offen
+        # Session-End: falls (Teil-)Position noch offen
         if entered:
             try:
                 price_data = entry_engine._fetch_1m(symbol, limit=3)
@@ -408,19 +436,24 @@ def main():
                     pnl = ((exit_price_actual - entry_price) / entry_price * 100) if bias == "LONG" \
                           else ((entry_price - exit_price_actual) / entry_price * 100)
             except:
-                pass
+                pnl = 0.0
+                exit_price_actual = entry_price
+
+            rest_pct = 50 if half_closed else 100
+            total_pnl += pnl * (rest_pct / 100)
             pnl_icon = "🟢" if pnl >= 0 else "🔴"
             exit_msg = (
-                f"📤 {mode} EXIT 100% {bias} {base}\n"
+                f"📤 {mode} EXIT {rest_pct}% {bias} {base}\n"
                 f"   Level:  3/3 — session_end\n"
                 f"   Entry:  ${entry_price:.6f}\n"
                 f"   Exit:   ${exit_price_actual:.6f}\n"
-                f"   PnL:    {pnl_icon} {pnl:+.2f}%\n"
+                f"   PnL:    {pnl_icon} {pnl:+.2f}% (Rest-Anteil)\n"
+                f"   Gesamt-PnL Trade: {total_pnl:+.2f}%\n"
                 f"   Info:   Session-Ende (DRY RUN)"
             )
             print(exit_msg); tg(exit_msg)
             _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                       reason="session_end", close_pct=100, pnl_pct=round(pnl, 2),
+                       reason="session_end", close_pct=rest_pct, pnl_pct=round(pnl, 2),
                        price=exit_price_actual, rsi=0, session=name)
             entered = False
     else:

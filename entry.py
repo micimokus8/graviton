@@ -338,29 +338,9 @@ class EntryEngine:
         # Preis an der EMA → AT_EMA
         signal.state = EntryState.AT_EMA
 
-        # ── Fast Entry: 5m RSI neutral → sofort Entry ──
-        # 1m RSI zu verrauscht, 1H RSI blockt Momentum-Trades (DEXE +5% ignoriert)
-        rsi_ok = False
-        try:
-            data_5m = self._fetch_1m(symbol, limit=50, tf="5m")
-            closes_5m = data_5m[:, 4]
-            rsi_5m = self._rsi(closes_5m)
-            if bias == "LONG":
-                rsi_ok = 30 <= rsi_5m <= 65
-            else:
-                rsi_ok = 35 <= rsi_5m <= 70
-        except Exception:
-            pass
-        if rsi_ok:
-            signal.entry_price = float(closes[-1])
-            sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
-            if bias == "LONG":
-                signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 8)
-            else:
-                signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 8)
-            signal.state = EntryState.ENTERED
-            signal.reasoning = f"Fast Entry: an EMA20 (5m RSI {rsi_5m:.0f}, Dist {distance_pct:.2f}%)"
-            return signal
+        # Fast-Entry ENTFERNT — 30-65 RSI ist praktisch immer wahr und
+        # umgeht die Rejection+Volumen-Bestätigung komplett.
+        # Jeder Entry MUSS jetzt über die Rejection-Kerze unten laufen.
 
         # Rejection-Prüfung auf 5m Kerze (statt 1m — 1m zu verrauscht)
         try:
