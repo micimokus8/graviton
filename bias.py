@@ -186,8 +186,8 @@ class BiasAnalyzer:
             else:
                 break
 
-        # Trend jünger als 4 Kerzen (16h) → frisch genug
-        if aligned < 4:
+        # Trend jünger als 5 Kerzen (20h) → frisch genug
+        if aligned < 5:
             return False, f"Trend {aligned} candles, frisch"
 
         if direction == "SHORT":
