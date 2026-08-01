@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 import numpy as np
 import ccxt
 
+from candle_utils import closed_ohlcv
+
 
 # ─── BiasResult ──────────────────────────────────────────────────────
 
@@ -77,9 +79,7 @@ class BiasAnalyzer:
         ex = self._get_exchange()
         try:
             raw = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
-            if not raw:
-                return np.array([])
-            return np.array(raw, dtype=np.float64)
+            return closed_ohlcv(raw, timeframe)
         except Exception:
             return np.array([])
 

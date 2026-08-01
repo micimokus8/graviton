@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from config import CFG
+from candle_utils import closed_ohlcv
 
 
 class EntryState(Enum):
@@ -88,7 +89,7 @@ class EntryEngine:
         """Fetch OHLCV. Default 1m, alternativ 5m."""
         ex = self._get_exchange()
         candles = ex.fetch_ohlcv(symbol, timeframe=tf, limit=limit)
-        return np.array(candles, dtype=float)
+        return closed_ohlcv(candles, tf)
 
     def _calc_ema(self, closes: np.ndarray, period: int = 20) -> np.ndarray:
         """Berechnet EMA als numpy array (glatt)."""
@@ -203,7 +204,9 @@ class EntryEngine:
         atr_1h_pct = 0.0
         try:
             ex = self._get_exchange()
-            candles_1h = ex.fetch_ohlcv(symbol, timeframe="1h", limit=20)
+            candles_1h = closed_ohlcv(
+                ex.fetch_ohlcv(symbol, timeframe="1h", limit=20), "1h"
+            )
             if len(candles_1h) >= 3:
                 trs = []
                 for i in range(1, len(candles_1h)):

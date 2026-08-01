@@ -18,6 +18,7 @@ from enum import Enum
 from config import CFG
 from patterns import detect_exit_pattern
 from sr_levels import SRCalculator
+from candle_utils import closed_ohlcv
 
 
 class ExitReason(Enum):
@@ -63,7 +64,7 @@ class ExitEngine:
     def _fetch_1m(self, symbol: str, limit: int = 50) -> np.ndarray:
         ex = self._get_exchange()
         candles = ex.fetch_ohlcv(symbol, timeframe="1m", limit=limit)
-        return np.array(candles, dtype=float)
+        return closed_ohlcv(candles, "1m")
 
     def _rsi(self, close: np.ndarray, period: int = 14) -> float:
         """Wilder's RSI (EMA-Smoothing)."""

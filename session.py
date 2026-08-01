@@ -22,6 +22,7 @@ from entry import EntryEngine, EntryState
 from exit import ExitEngine, ExitReason
 from sr_levels import check_sr_for_entry
 from telegram_sender import send as tg
+from candle_utils import closed_ohlcv
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -67,6 +68,73 @@ def _ts_str() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M UTC")
 
 
+def _pnl_pct(entry_price: float, price: float, bias: str) -> float:
+    """Return directional PnL percentage for a LONG/SHORT trade."""
+    if entry_price <= 0 or price <= 0:
+        raise ValueError("Entry- und Exit-Preis müssen positiv sein")
+    if bias == "LONG":
+        return (price - entry_price) / entry_price * 100
+    return (entry_price - price) / entry_price * 100
+
+
+def _stop_fill_price(
+    bias: str,
+    stop_price: float,
+    candle_open: float,
+) -> float:
+    """Use stop price, or the worse candle open for a gap through the stop."""
+    if bias == "LONG":
+        return min(stop_price, candle_open)
+    return max(stop_price, candle_open)
+
+
+def _profit_lock_price(
+    bias: str,
+    target_price: float,
+    candle_open: float,
+) -> float:
+    """Use target price, or the favorable candle open for a gap through target."""
+    if bias == "LONG":
+        return max(target_price, candle_open)
+    return min(target_price, candle_open)
+
+
+def _resolve_dry_run_candle(
+    *,
+    bias: str,
+    entry_price: float,
+    initial_stop: float,
+    active_stop: float,
+    half_closed: bool,
+    candle_open: float,
+    candle_high: float,
+    candle_low: float,
+) -> tuple[str, float] | None:
+    """Resolve one closed candle without using its close as an execution fill.
+
+    With OHLCV alone the intrabar path is unknowable. Before the profit lock,
+    an initial stop therefore wins over a same-candle target hit (conservative
+    and deterministic). Once half the position is closed, only the active stop
+    is relevant.
+    """
+    if bias == "LONG":
+        stop_hit = candle_low <= active_stop
+        target_price = entry_price * 1.01
+        target_hit = candle_high >= target_price
+    else:
+        stop_hit = candle_high >= active_stop
+        target_price = entry_price * 0.99
+        target_hit = candle_low <= target_price
+
+    if not half_closed and stop_hit:
+        return "stop_loss", _stop_fill_price(bias, initial_stop, candle_open)
+    if not half_closed and target_hit:
+        return "profit_lock", _profit_lock_price(bias, target_price, candle_open)
+    if half_closed and stop_hit:
+        return "breakeven_stop", _stop_fill_price(bias, active_stop, candle_open)
+    return None
+
+
 def _check_btc_1m_trend() -> str:
     """
     BTC 1m Mikrotrend für Entry-Filter.
@@ -77,8 +145,10 @@ def _check_btc_1m_trend() -> str:
     import numpy as np
     try:
         ex = ccxt.krakenfutures({"enableRateLimit": True, "options": {"defaultType": "swap"}})
-        candles = ex.fetch_ohlcv("BTC/USD:USD", timeframe="1m", limit=10)
-        if not candles or len(candles) < 6:
+        candles = closed_ohlcv(
+            ex.fetch_ohlcv("BTC/USD:USD", timeframe="1m", limit=10), "1m"
+        )
+        if len(candles) < 6:
             return "neutral"
         closes = np.array([c[4] for c in candles], dtype=float)
         # EMA5 — konsistente Serie über alle 10 Bars
@@ -365,18 +435,19 @@ def main():
         half_closed = False          # Stage 1: 50% bei +1% PnL
         remaining_stop = stop_loss   # Stop für den (verbleibenden) Teil
         total_pnl = 0.0              # gewichteter Gesamt-PnL über beide Teile
+        last_processed_candle_ts = None  # jedes Candle-Event genau einmal
 
         while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
             try:
                 price_data = entry_engine._fetch_1m(symbol, limit=3)
                 if len(price_data) > 0:
-                    current_px = float(price_data[-1][4])
-                    candle_low = float(price_data[-1][3])  # für SL-Detektion (LOW bei LONG)
-                    candle_high = float(price_data[-1][2])  # für SL-Detektion (HIGH bei SHORT)
-                    # Nutze LOW/HIGH statt CLOSE — fängt Level-Durchbrüche innerhalb der Kerze
-                    # SONST: Break-Even-Level läuft durch, 60s später −1.5%
-                    pnl = ((current_px - entry_price) / entry_price * 100) if bias == "LONG" \
-                          else ((entry_price - current_px) / entry_price * 100)
+                    candle = price_data[-1]
+                    candle_ts = float(candle[0])
+                    candle_open = float(candle[1])
+                    candle_high = float(candle[2])
+                    candle_low = float(candle[3])
+                    current_px = float(candle[4])
+                    pnl = _pnl_pct(entry_price, current_px, bias)
                     _log_debug(0, base, bias, "DRY_RUN", f"PnL {pnl:+.2f}% @ {current_px:.4f}",
                                price=current_px, pnl=round(pnl, 2))
 
@@ -387,56 +458,72 @@ def main():
                         print(f"   [{_ts_str()}] {base}: PnL {pnl:+.2f}% (best: {best_pnl:+.2f}%)")
                         last_pnl_msg = time.time()
 
-                    # ── Stage 1: Profit Lock bei +1%, nur einmal ──
-                    if not half_closed and pnl >= 1.0:
+                    # Jede geschlossene Candle nur einmal als Event auswerten,
+                    # auch wenn der 20s-Poller sie mehrfach sieht.
+                    is_new_candle = candle_ts != last_processed_candle_ts
+                    if is_new_candle:
+                        last_processed_candle_ts = candle_ts
+                        event = _resolve_dry_run_candle(
+                            bias=bias,
+                            entry_price=entry_price,
+                            initial_stop=stop_loss,
+                            active_stop=remaining_stop if half_closed else stop_loss,
+                            half_closed=half_closed,
+                            candle_open=candle_open,
+                            candle_high=candle_high,
+                            candle_low=candle_low,
+                        )
+                    else:
+                        event = None
+
+                    if event and event[0] == "profit_lock":
+                        _, fill_price = event
                         half_closed = True
-                        # Break-Even mit 0.1% Puffer (Schluckt 60s Polling-Lücke)
-                        # SONST: Preis läuft durch Break-Even bis nächster Poll → −1%
-                        remaining_stop = entry_price * (1 + 0.001) if bias == "LONG" else entry_price * (1 - 0.001)
+                        remaining_stop = (
+                            entry_price * (1 + 0.001)
+                            if bias == "LONG"
+                            else entry_price * (1 - 0.001)
+                        )
+                        lock_pnl = _pnl_pct(entry_price, fill_price, bias)
+                        total_pnl += lock_pnl * 0.5
                         lock_msg = (
                             f"📤 {mode} EXIT 50% {bias} {base}\n"
                             f"   Level:  1/3 — profit_lock (simuliert)\n"
                             f"   Entry:  ${entry_price:.8f}\n"
-                                                    f"   Exit:   ${current_px:.8f}\n"
-                            f"   PnL:    🟢 {pnl:+.2f}%\n"
+                            f"   Exit:   ${fill_price:.8f}\n"
+                            f"   PnL:    🟢 {lock_pnl:+.2f}%\n"
                             f"   Info:   50% gesichert, Rest → SL auf Break-Even"
                         )
                         print(lock_msg); tg(lock_msg)
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                                   reason="profit_lock", close_pct=50, pnl_pct=round(pnl, 2),
-                                   price=current_px, rsi=0, session=name)
-                        total_pnl += pnl * 0.5   # erste Hälfte fix verbucht
+                                   reason="profit_lock", close_pct=50,
+                                   pnl_pct=round(lock_pnl, 2), price=fill_price,
+                                   rsi=0, session=name)
 
-                    # ── Stop-Check: nutzt Candle-LOW/HIGH statt nur CLOSE ──
-                    active_stop = remaining_stop if half_closed else stop_loss
-                    if bias == "LONG":
-                        sl_trigger = candle_low <= active_stop  # LOW getroffen = Level durchbrochen
-                    else:
-                        sl_trigger = candle_high >= active_stop  # HIGH getroffen = Level durchbrochen
-                    if sl_trigger:
+                    elif event:
+                        reason_label, fill_price = event
                         rest_pct = 50 if half_closed else 100
-                        rest_pnl = ((current_px - entry_price) / entry_price * 100) if bias == "LONG" \
-                                   else ((entry_price - current_px) / entry_price * 100)
+                        rest_pnl = _pnl_pct(entry_price, fill_price, bias)
                         total_pnl += rest_pnl * (rest_pct / 100)
                         pnl_icon = "🟢" if rest_pnl >= 0 else "🔴"
-                        reason_label = "breakeven_stop" if half_closed else "stop_loss"
                         sl_msg = (
                             f"📤 {mode} EXIT {rest_pct}% {bias} {base}\n"
                             f"   Level:  2/3 — {reason_label} (simuliert)\n"
                             f"   Entry:  ${entry_price:.8f}\n"
-                                                    f"   Exit:   ${current_px:.8f}\n"
+                            f"   Exit:   ${fill_price:.8f}\n"
                             f"   PnL:    {pnl_icon} {rest_pnl:+.2f}% (Rest-Anteil)\n"
                             f"   Gesamt-PnL Trade: {total_pnl:+.2f}%\n"
                             f"   Info:   DRY RUN {'Break-Even-Stop' if half_closed else 'SL'} getriggert"
                         )
                         print(sl_msg); tg(sl_msg)
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                                   reason=reason_label, close_pct=rest_pct, pnl_pct=round(rest_pnl, 2),
-                                   price=current_px, rsi=0, session=name)
+                                   reason=reason_label, close_pct=rest_pct,
+                                   pnl_pct=round(rest_pnl, 2), price=fill_price,
+                                   rsi=0, session=name)
                         entered = False
                         break
-            except:
-                pass
+            except Exception as exc:
+                print(f"   DRY RUN Watcher-Fehler: {exc}")
             time.sleep(20)  # 20s statt 60s — fängt Break-Even/SL-Level vor großem Durchbruch
 
         # Session-End: falls (Teil-)Position noch offen
@@ -445,9 +532,11 @@ def main():
                 price_data = entry_engine._fetch_1m(symbol, limit=3)
                 if len(price_data) > 0:
                     exit_price_actual = float(price_data[-1][4])
-                    pnl = ((exit_price_actual - entry_price) / entry_price * 100) if bias == "LONG" \
-                          else ((entry_price - exit_price_actual) / entry_price * 100)
-            except:
+                    pnl = _pnl_pct(entry_price, exit_price_actual, bias)
+                else:
+                    raise RuntimeError("keine geschlossene 1m-Candle verfügbar")
+            except Exception as exc:
+                print(f"   DRY RUN Session-End-Preis fehlgeschlagen: {exc}")
                 pnl = 0.0
                 exit_price_actual = entry_price
 
