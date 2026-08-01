@@ -134,7 +134,7 @@ class Watcher:
 
                 # Check Trailing Hit
                 if self.check_trailing_hit(symbol, signal.price):
-                    signal.reason = ExitReason.PATTERN
+                    signal.reason = ExitReason.STOP_LOSS
                     signal.close_pct = 1.0   # Rest vollständig schließen
                     exits.append((symbol, signal))
 

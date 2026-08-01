@@ -823,14 +823,14 @@ def _run_session(session_key: str):
                             f"   Info:   {sig.message}"
                         )
                         print(exit_msg); tg(exit_msg)
-                        if trader is not None:
-                            result = trader.close_position(symbol, bias.lower())
-                            if not result.success:
-                                err_msg = f"🚨 [{name}] {base}: Stop-Close fehlgeschlagen — {result.message}"
-                                print(err_msg); tg(err_msg)
-                        entered = False
-                        watcher.remove_position(symbol)
-                        break
+                    if trader is not None:
+                        result = trader.close_position(symbol, bias.lower())
+                        if not result.success:
+                            err_msg = f"🚨 [{name}] {base}: {sig.reason.value} - Close fehlgeschlagen — {result.message}"
+                            print(err_msg); tg(err_msg)
+                    entered = False
+                    watcher.remove_position(symbol)
+                    break
 
                 else:
                     if tracked.trailing_active:
