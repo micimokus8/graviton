@@ -260,15 +260,18 @@ def main():
                         continue
 
                     # ── Trade Log: ENTRY ──
+                    vol_ratio = cand.get("session_vol_ratio", 0)
                     _log_trade("entry", symbol=symbol, base=base, bias=bias,
                                price=signal.entry_price, ema20=signal.ema20,
-                               stop_loss=signal.stop_loss, mode=mode, session=name)
+                               stop_loss=signal.stop_loss, mode=mode, session=name,
+                               vol_ratio=round(vol_ratio, 2))
                     entry_msg = (
                         f"🎯 {mode} ENTRY {bias} {base}\n"
-                        f"   Price:  {signal.entry_price:.6f}\n"
-                        f"   EMA20:  {signal.ema20:.6f}\n"
+                        f"   Price:  {signal.entry_price:.8f}\n"
+                        f"   EMA20:  {signal.ema20:.8f}\n"
                         f"   Dist:   {signal.distance_pct:.2f}%\n"
-                        f"   SL:     {signal.stop_loss:.6f}\n"
+                        f"   Vol:    {vol_ratio:.2f}x\n"
+                        f"   SL:     {signal.stop_loss:.8f}\n"
                         f"   Grund:  {signal.reasoning}"
                     )
                     print(entry_msg); tg(entry_msg)
