@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from config import CFG
+from atomic_json import atomic_write_json
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -184,6 +185,13 @@ class KrakenScanner:
             except Exception:
                 pass
 
+            # Die finale Eligibility muss auf derselben OHLCV-Metrik basieren,
+            # die gespeichert und sortiert wird. Ticker-% dient nur als billiger
+            # Vorfilter vor dem zusätzlichen OHLCV-Request.
+            final_abs_change = abs(change_pct)
+            if final_abs_change < min_chg or final_abs_change > max_chg:
+                continue
+
             result = ScanResult(
                 symbol=sym,
                 kraken_id=market.get("id", ""),
@@ -265,7 +273,6 @@ def run_scan() -> List[ScanResult]:
 
 def _save_watchlist(results: List[ScanResult]):
     """Speichert Watchlist als JSON für Bias-Pipeline."""
-    import json
     data_dir = Path(__file__).parent / "data"
     data_dir.mkdir(exist_ok=True)
     watchlist = [
@@ -279,8 +286,7 @@ def _save_watchlist(results: List[ScanResult]):
         }
         for r in results
     ]
-    with open(data_dir / "watchlist.json", "w") as f:
-        json.dump(watchlist, f, indent=2)
+    atomic_write_json(data_dir / "watchlist.json", watchlist)
 
 
 # ═══════════════════════════════════════════════════════════════════

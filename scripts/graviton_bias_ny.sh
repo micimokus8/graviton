@@ -1,4 +1,5 @@
 #!/bin/bash
+set -o pipefail
 # Graviton Bias Cron — NY (16:01 DE) / Asia (00:01 DE)
 # Läuft bias.py im Hintergrund (kein Warten auf Session nötig — bias.py ist instant)
 cd /root/.hermes/workspace/graviton || exit 1
@@ -10,6 +11,7 @@ import sys, json
 sys.path.insert(0, '.')
 from config import CFG, SESSIONS
 from bias import analyze_watchlist
+from atomic_json import atomic_write_json
 from datetime import datetime, timezone
 
 data_dir = __import__('pathlib').Path('data')
@@ -30,11 +32,12 @@ open_ts = int(open_dt.timestamp() * 1000)
 results = analyze_watchlist(symbols, open_ts)
 candidates = [r for r in results if r.bias in ('LONG', 'SHORT')]
 print(f'{len(candidates)} Kandidaten von {len(results)}')
-for r in candidates:
-    print(f'  {r.bias} {r.symbol} | RSI {r.rsi_15m} | {r.reason}')
-# Save bias result
+for r in results:
+    print(f'  {r.bias} {r.symbol} | {r.reason}')
+# Save FULL bias result (alle Coins, inkl. NOISE) für Session
 bias_out = [{'symbol': r.symbol, 'bias': r.bias, 'price': r.session_open_price,
-             'rsi': r.rsi_15m, 'reason': r.reason} for r in candidates]
-with open(data_dir / 'bias_result.json', 'w') as f:
-    json.dump(bias_out, f, indent=2)
+             'reason': r.reason, 'green': r.green_candles, 'red': r.red_candles,
+             'signal_count': r.signal_count,
+             'session_vol_ratio': r.session_vol_ratio} for r in results]
+atomic_write_json(data_dir / 'bias_result.json', bias_out)
 " 2>&1 | tee -a "$LOG"

@@ -102,7 +102,7 @@ class BiasAnalyzer:
         """
         data = self._fetch_ohlcv(symbol, timeframe, limit=60)
         if len(data) < 25:
-            return {"signal": "NEUTRAL", "detail": "zu wenig Daten"}
+            return {"signal": "ERROR", "detail": f"zu wenig geschlossene Daten ({len(data)} < 25)"}
 
         closes = data[:, 4]
         price = float(closes[-1])
@@ -267,6 +267,27 @@ class BiasAnalyzer:
 
         # Signal-Details für Reason
         tf_detail = f"4H:{tf_4h['signal']} 1H:{tf_1h['signal']} 15m:{tf_15m['signal']}"
+
+        # Fehlende Timeframe-Daten sind kein neutrales Marktsignal. Ein 2/3-
+        # Trade darf nicht dadurch entstehen, dass der dritte TF ausgefallen ist.
+        tf_results = {"4H": tf_4h, "1H": tf_1h, "15m": tf_15m}
+        tf_errors = [
+            f"{name}: {result['detail']}"
+            for name, result in tf_results.items()
+            if result["signal"] == "ERROR"
+        ]
+        if tf_errors:
+            return BiasResult(
+                symbol=symbol, bias="NOISE",
+                session_open_price=session_open_price,
+                current_price=current_price,
+                session_chg_pct=session_chg_pct,
+                session_vol_ratio=session_vol_ratio,
+                candles_analyzed=n,
+                green_candles=green, red_candles=red,
+                signal_count=0,
+                reason=f"NOISE (Datenfehler: {'; '.join(tf_errors)}) | {tf_detail}",
+            )
 
         # Volumen-Info
         vol_note = f"(Vol {session_vol_ratio:.1f}x)" if session_vol_ratio > 0 else ""

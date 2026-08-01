@@ -23,6 +23,7 @@ from exit import ExitEngine, ExitReason
 from sr_levels import check_sr_for_entry
 from telegram_sender import send as tg
 from candle_utils import closed_ohlcv
+from atomic_json import atomic_write_json
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -31,6 +32,8 @@ BIAS_RESULT_FILE = DATA_DIR / "bias_result.json"
 ENTRY_STATE_FILE = DATA_DIR / "entry_state.json"
 TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
 DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
+WATCHLIST_MAX_AGE_SECONDS = 45 * 60
+BIAS_MAX_AGE_SECONDS = 15 * 60
 
 
 
@@ -38,6 +41,42 @@ DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, St
 def _base(cand: dict) -> str:
     """Extrahiert Base aus Symbol ('CRV/USD:USD' → 'CRV')."""
     return cand.get("base") or cand["symbol"].split("/")[0]
+
+
+def _state_file_fresh(
+    path: Path,
+    max_age_seconds: float,
+    *,
+    now_ts: float | None = None,
+) -> bool:
+    """Return True only for an existing state file from the current run window."""
+    if not path.exists():
+        return False
+    reference = time.time() if now_ts is None else now_ts
+    age = reference - path.stat().st_mtime
+    return -5 <= age <= max_age_seconds
+
+
+def _state_symbols_match(watchlist: list[dict], bias_results: list[dict]) -> bool:
+    """Bias output must represent exactly the watchlist it was built from."""
+    watchlist_symbols = {item.get("symbol") for item in watchlist}
+    bias_symbols = {item.get("symbol") for item in bias_results}
+    return None not in watchlist_symbols | bias_symbols and watchlist_symbols == bias_symbols
+
+
+def _partition_sr_candidates(candidates: list[dict], checker=check_sr_for_entry):
+    """Split candidates by S/R without ever re-adding a blocked fallback."""
+    active = []
+    blocked = []
+    for candidate in candidates:
+        is_blocked, reason, _ = checker(
+            candidate["symbol"], candidate["price"], candidate["bias"]
+        )
+        if is_blocked:
+            blocked.append((candidate, reason))
+        else:
+            active.append(candidate)
+    return active, blocked
 
 def _log_trade(event: str, **kwargs):
     """Trade-Event in JSONL loggen."""
@@ -197,8 +236,18 @@ def main():
         print(msg); tg(msg)
         return
 
-    with open(WATCHLIST_FILE) as f:
-        watchlist = json.load(f)
+    if not _state_file_fresh(WATCHLIST_FILE, WATCHLIST_MAX_AGE_SECONDS):
+        msg = f"⚠️ [{name}] Watchlist veraltet (>45 Min) — Session skip"
+        print(msg); tg(msg)
+        return
+
+    try:
+        with open(WATCHLIST_FILE) as f:
+            watchlist = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        msg = f"⚠️ [{name}] Watchlist ungültig — {exc}"
+        print(msg); tg(msg)
+        return
 
     if not watchlist:
         msg = f"⚠️ [{name}] Watchlist leer — Session skip"
@@ -216,8 +265,23 @@ def main():
         print(msg); tg(msg)
         return
 
-    with open(bias_file) as f:
-        bias_results = json.load(f)
+    if not _state_file_fresh(bias_file, BIAS_MAX_AGE_SECONDS):
+        msg = f"⚠️ [{name}] Bias-File veraltet (>15 Min) — Session skip"
+        print(msg); tg(msg)
+        return
+
+    try:
+        with open(bias_file) as f:
+            bias_results = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        msg = f"⚠️ [{name}] Bias-File ungültig — {exc}"
+        print(msg); tg(msg)
+        return
+
+    if not _state_symbols_match(watchlist, bias_results):
+        msg = f"⚠️ [{name}] Bias/Watchlist gehören nicht zum selben Run — Session skip"
+        print(msg); tg(msg)
+        return
 
     candidates = [r for r in bias_results if r["bias"] in ("LONG", "SHORT")]
 
@@ -245,26 +309,11 @@ def main():
     stop_loss = 0.0
     last_status_msg = 0
 
-    # S/R vorab prüfen — blockierte Kandidaten notieren, aber nicht hart ausschließen
-    active_candidates = []
-    blocked_candidates = []  # für Fallback wenn alle blockiert
-    for cand in candidates:
-        blocked, reason, sr = check_sr_for_entry(cand["symbol"], cand["price"], cand["bias"])
-        if blocked:
-            # Distanz zum S/R-Level berechnen für Fallback-Sortierung
-            try:
-                if cand["bias"] == "LONG":
-                    res = sr.nearest_resistance(cand["price"])
-                    sr_dist = (res - cand["price"]) / cand["price"] * 100 if res else 0
-                else:
-                    sup = sr.nearest_support(cand["price"])
-                    sr_dist = (cand["price"] - sup) / cand["price"] * 100 if sup else 0
-            except:
-                sr_dist = 0
-            print(f"🚫 {_base(cand)}: S/R-Block — {reason}")
-            blocked_candidates.append((sr_dist, cand))
-        else:
-            active_candidates.append(cand)
+    # S/R vorab hart prüfen. Blockierte Kandidaten werden nie als Fallback
+    # zurück in die Entry-Rotation aufgenommen.
+    active_candidates, blocked_candidates = _partition_sr_candidates(candidates)
+    for blocked_candidate, block_reason in blocked_candidates:
+        print(f"🚫 {_base(blocked_candidate)}: S/R-Block — {block_reason}")
 
     # Priorität: 3/3 Signale zuerst, 2/3 als Fallback
     if active_candidates:
@@ -276,14 +325,6 @@ def main():
             active_candidates = priority + fallback  # 3/3 zuerst, dann 2/3
         else:
             print(f"   Kein 3/3 — alle {len(fallback)}× 2/3 aktiv")
-
-    # Fallback: wenn alle durch S/R blockiert → nimm den mit der größten Distanz
-    if not active_candidates and blocked_candidates:
-        blocked_candidates.sort(key=lambda x: -x[0])  # größte Distanz zuerst
-        fallback = blocked_candidates[0][1]
-        print(f"⚠️ Alle Kandidaten S/R-geblockt — Fallback: {_base(fallback)} ({blocked_candidates[0][0]:.2f}% Distanz)")
-        tg(f"⚠️ [{name}] Alle S/R-geblockt — Fallback {_base(fallback)} ({blocked_candidates[0][0]:.2f}%)")
-        active_candidates.append(fallback)
 
     if not active_candidates:
         msg = f"⚠️ [{name}] Alle Kandidaten S/R-geblockt — Session beendet."
@@ -321,6 +362,19 @@ def main():
                            dist=round(signal.distance_pct, 3))
 
                 if signal.state == EntryState.ENTERED:
+                    # S/R kann sich seit dem Bias-Snapshot verschoben haben.
+                    # Deshalb direkt am tatsächlichen Entry-Preis erneut prüfen.
+                    entry_sr_blocked, entry_sr_reason, _ = check_sr_for_entry(
+                        symbol, signal.entry_price, bias
+                    )
+                    if entry_sr_blocked:
+                        print(f"  [{_ts_str()}] {base}: S/R am Entry blockiert — {entry_sr_reason}")
+                        _log_debug(
+                            cycle, base, bias, "sr_blocked_at_entry", entry_sr_reason,
+                            price=signal.entry_price,
+                        )
+                        continue
+
                     # ── BTC-Korrelations-Check ──
                     btc_trend = _check_btc_1m_trend()
                     btc_blocked = (bias == "LONG" and btc_trend == "down") or \
@@ -364,12 +418,11 @@ def main():
                             print(f"  → LIVE ERROR: {fill.message}")
                             entered = False
 
-                    with open(ENTRY_STATE_FILE, "w") as f:
-                        json.dump({
-                            "entered": entered, "symbol": symbol, "bias": bias,
-                            "entry": entry_price, "sl": stop_loss,
-                            "time": datetime.now(timezone.utc).isoformat(),
-                        }, f, indent=2)
+                    atomic_write_json(ENTRY_STATE_FILE, {
+                        "entered": entered, "symbol": symbol, "bias": bias,
+                        "entry": entry_price, "sl": stop_loss,
+                        "time": datetime.now(timezone.utc).isoformat(),
+                    })
                     break  # inner loop (candidates)
 
                 elif signal.state == EntryState.AT_EMA:
