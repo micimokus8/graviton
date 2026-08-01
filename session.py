@@ -368,6 +368,10 @@ def main():
                 price_data = entry_engine._fetch_1m(symbol, limit=3)
                 if len(price_data) > 0:
                     current_px = float(price_data[-1][4])
+                    candle_low = float(price_data[-1][3])  # für SL-Detektion (LOW bei LONG)
+                    candle_high = float(price_data[-1][2])  # für SL-Detektion (HIGH bei SHORT)
+                    # Nutze LOW/HIGH statt CLOSE — fängt Level-Durchbrüche innerhalb der Kerze
+                    # SONST: Break-Even-Level läuft durch, 60s später −1.5%
                     pnl = ((current_px - entry_price) / entry_price * 100) if bias == "LONG" \
                           else ((entry_price - current_px) / entry_price * 100)
                     _log_debug(0, base, bias, "DRY_RUN", f"PnL {pnl:+.2f}% @ {current_px:.4f}",
@@ -383,12 +387,14 @@ def main():
                     # ── Stage 1: Profit Lock bei +1%, nur einmal ──
                     if not half_closed and pnl >= 1.0:
                         half_closed = True
-                        remaining_stop = entry_price  # Break-Even für den Rest
+                        # Break-Even mit 0.1% Puffer (Schluckt 60s Polling-Lücke)
+                        # SONST: Preis läuft durch Break-Even bis nächster Poll → −1%
+                        remaining_stop = entry_price * (1 + 0.001) if bias == "LONG" else entry_price * (1 - 0.001)
                         lock_msg = (
                             f"📤 {mode} EXIT 50% {bias} {base}\n"
                             f"   Level:  1/3 — profit_lock (simuliert)\n"
-                            f"   Entry:  ${entry_price:.6f}\n"
-                            f"   Exit:   ${current_px:.6f}\n"
+                            f"   Entry:  ${entry_price:.8f}\n"
+                                                    f"   Exit:   ${current_px:.8f}\n"
                             f"   PnL:    🟢 {pnl:+.2f}%\n"
                             f"   Info:   50% gesichert, Rest → SL auf Break-Even"
                         )
@@ -398,9 +404,12 @@ def main():
                                    price=current_px, rsi=0, session=name)
                         total_pnl += pnl * 0.5   # erste Hälfte fix verbucht
 
-                    # ── Stop-Check: nutzt Break-Even nach Profit-Lock, sonst Original-SL ──
+                    # ── Stop-Check: nutzt Candle-LOW/HIGH statt nur CLOSE ──
                     active_stop = remaining_stop if half_closed else stop_loss
-                    sl_trigger = (current_px <= active_stop) if bias == "LONG" else (current_px >= active_stop)
+                    if bias == "LONG":
+                        sl_trigger = candle_low <= active_stop  # LOW getroffen = Level durchbrochen
+                    else:
+                        sl_trigger = candle_high >= active_stop  # HIGH getroffen = Level durchbrochen
                     if sl_trigger:
                         rest_pct = 50 if half_closed else 100
                         rest_pnl = ((current_px - entry_price) / entry_price * 100) if bias == "LONG" \
@@ -411,8 +420,8 @@ def main():
                         sl_msg = (
                             f"📤 {mode} EXIT {rest_pct}% {bias} {base}\n"
                             f"   Level:  2/3 — {reason_label} (simuliert)\n"
-                            f"   Entry:  ${entry_price:.6f}\n"
-                            f"   Exit:   ${current_px:.6f}\n"
+                            f"   Entry:  ${entry_price:.8f}\n"
+                                                    f"   Exit:   ${current_px:.8f}\n"
                             f"   PnL:    {pnl_icon} {rest_pnl:+.2f}% (Rest-Anteil)\n"
                             f"   Gesamt-PnL Trade: {total_pnl:+.2f}%\n"
                             f"   Info:   DRY RUN {'Break-Even-Stop' if half_closed else 'SL'} getriggert"
@@ -425,7 +434,7 @@ def main():
                         break
             except:
                 pass
-            time.sleep(60)
+            time.sleep(20)  # 20s statt 60s — fängt Break-Even/SL-Level vor großem Durchbruch
 
         # Session-End: falls (Teil-)Position noch offen
         if entered:
@@ -445,8 +454,8 @@ def main():
             exit_msg = (
                 f"📤 {mode} EXIT {rest_pct}% {bias} {base}\n"
                 f"   Level:  3/3 — session_end\n"
-                f"   Entry:  ${entry_price:.6f}\n"
-                f"   Exit:   ${exit_price_actual:.6f}\n"
+                f"   Entry:  ${entry_price:.8f}\n"
+                f"   Exit:   ${exit_price_actual:.8f}\n"
                 f"   PnL:    {pnl_icon} {pnl:+.2f}% (Rest-Anteil)\n"
                 f"   Gesamt-PnL Trade: {total_pnl:+.2f}%\n"
                 f"   Info:   Session-Ende (DRY RUN)"
