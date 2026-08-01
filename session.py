@@ -10,14 +10,15 @@ Usage:
   python3 session.py asia    # Asia Session
 """
 
+import fcntl
+import os
 import json, sys, time
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import CFG, SESSIONS, DRY_RUN
-from bias import BiasAnalyzer
+from config import SESSIONS, DRY_RUN
 from entry import EntryEngine, EntryState
 from exit import ExitEngine, ExitReason
 from sr_levels import check_sr_for_entry
@@ -77,6 +78,97 @@ def _partition_sr_candidates(candidates: list[dict], checker=check_sr_for_entry)
         else:
             active.append(candidate)
     return active, blocked
+
+
+class SessionLock:
+    """Non-blocking process lock for one Graviton session key."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._handle = None
+
+    def acquire(self) -> bool:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(self.path, "a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            return False
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()))
+        handle.flush()
+        self._handle = handle
+        return True
+
+    def release(self) -> None:
+        if self._handle is None:
+            return
+        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+        self._handle.close()
+        self._handle = None
+
+
+def _rebase_stop_loss(
+    signal_entry: float,
+    signal_stop: float,
+    fill_price: float,
+    bias: str,
+) -> float:
+    """Preserve the signal's risk percentage around the actual live fill."""
+    if min(signal_entry, signal_stop, fill_price) <= 0:
+        raise ValueError("Entry-, Fill- und Stop-Preis müssen positiv sein")
+    risk_fraction = abs(signal_entry - signal_stop) / signal_entry
+    if bias == "LONG":
+        return round(fill_price * (1 - risk_fraction), 8)
+    return round(fill_price * (1 + risk_fraction), 8)
+
+
+def _execute_live_entry(trader, symbol: str, bias: str, signal):
+    """Open a live position and require confirmed exchange protection."""
+    fill = trader.open_position(symbol, bias.lower())
+    if not fill.success:
+        return None, signal.stop_loss, f"Entry fehlgeschlagen: {fill.message}"
+
+    live_stop = _rebase_stop_loss(
+        signal.entry_price, signal.stop_loss, fill.price, bias
+    )
+    if trader.set_stop_loss(symbol, bias.lower(), live_stop, fill.size):
+        return fill, live_stop, ""
+
+    emergency = trader.close_position(symbol, bias.lower(), close_pct=1.0)
+    if emergency.success:
+        return None, live_stop, (
+            "Stop-Loss fehlgeschlagen; Entry per Emergency-Close geschlossen"
+        )
+    return fill, live_stop, (
+        "KRITISCH: Stop-Loss und Emergency-Close fehlgeschlagen — "
+        f"{emergency.message}"
+    )
+
+
+def _execute_live_partial_exit(
+    trader,
+    symbol: str,
+    bias: str,
+    new_stop: float,
+) -> tuple[str, str]:
+    """Reduce first under existing protection, then replace the stop."""
+    partial = trader.close_position(symbol, bias.lower(), close_pct=0.5)
+    if not partial.success:
+        return "unchanged", f"Partial-Close fehlgeschlagen: {partial.message}"
+    if trader.set_stop_loss(symbol, bias.lower(), new_stop):
+        return "protected", ""
+
+    emergency = trader.close_position(symbol, bias.lower(), close_pct=1.0)
+    if emergency.success:
+        return "closed", "Break-Even-SL fehlgeschlagen; Rest per Emergency-Close geschlossen"
+    return "critical", (
+        "KRITISCH: Break-Even-SL und Emergency-Close fehlgeschlagen — "
+        f"{emergency.message}"
+    )
+
 
 def _log_trade(event: str, **kwargs):
     """Trade-Event in JSONL loggen."""
@@ -206,6 +298,18 @@ def _check_btc_1m_trend() -> str:
 
 def main():
     session_key = sys.argv[1] if len(sys.argv) > 1 else "ny"
+    lock = SessionLock(DATA_DIR / f"session_{session_key}.lock")
+    if not lock.acquire():
+        msg = f"⚠️ [{session_key.upper()}] Session läuft bereits — zweiter Start abgebrochen"
+        print(msg); tg(msg)
+        return
+    try:
+        _run_session(session_key)
+    finally:
+        lock.release()
+
+
+def _run_session(session_key: str):
     session = SESSIONS[session_key]
     mode = "[DRY RUN]" if DRY_RUN else "[LIVE]"
     name = session_key.upper()
@@ -304,6 +408,24 @@ def main():
     # Candidate-Rotation: alle Kandidaten rotierend prüfen, nicht nur ersten
     entry_engine = EntryEngine()
     exit_engine = ExitEngine()
+    trader = None
+    if not DRY_RUN:
+        from trader import KrakenTrader
+        trader = KrakenTrader()
+        try:
+            open_positions = trader.get_open_positions(strict=True)
+        except RuntimeError as exc:
+            msg = f"⚠️ [{name}] Positionsprüfung fehlgeschlagen — {exc}"
+            print(msg); tg(msg)
+            return
+        active_positions = [
+            position for position in open_positions
+            if float(position.get("contracts", 0) or 0) > 0
+        ]
+        if active_positions:
+            msg = f"⚠️ [{name}] Bereits offene Kraken-Position — kein neuer Entry"
+            print(msg); tg(msg)
+            return
     entered = False
     entry_price = 0.0
     stop_loss = 0.0
@@ -383,40 +505,55 @@ def main():
                         print(f"  [{_ts_str()}] {base}: BTC 1m {'bearish' if bias == 'LONG' else 'bullish'} — skip")
                         continue
 
-                    # ── Trade Log: ENTRY ──
                     vol_ratio = cand.get("session_vol_ratio", 0)
-                    _log_trade("entry", symbol=symbol, base=base, bias=bias,
-                               price=signal.entry_price, ema20=signal.ema20,
-                               stop_loss=signal.stop_loss, mode=mode, session=name,
-                               vol_ratio=round(vol_ratio, 2))
-                    entry_msg = (
-                        f"🎯 {mode} ENTRY {bias} {base}\n"
-                        f"   Price:  {signal.entry_price:.8f}\n"
-                        f"   EMA20:  {signal.ema20:.8f}\n"
-                        f"   Dist:   {signal.distance_pct:.2f}%\n"
-                        f"   Vol:    {vol_ratio:.2f}x\n"
-                        f"   SL:     {signal.stop_loss:.8f}\n"
-                        f"   Grund:  {signal.reasoning}"
-                    )
-                    print(entry_msg); tg(entry_msg)
-
                     entered = True
                     entry_price = signal.entry_price
                     stop_loss = signal.stop_loss
-                    entry_engine.increment_step(symbol)
 
-                    # LIVE: execute trade
                     if not DRY_RUN:
-                        from trader import KrakenTrader
-                        trader = KrakenTrader()
-                        fill = trader.open_position(symbol, bias.lower())
-                        if fill.success:
-                            trader.set_stop_loss(symbol, bias.lower(), stop_loss, fill.size)
-                            entry_price = fill.price
-                            print(f"  → LIVE {bias} {base} @ {fill.price:.6f} | SL: {stop_loss:.6f}")
-                        else:
-                            print(f"  → LIVE ERROR: {fill.message}")
+                        fill, live_stop, live_error = _execute_live_entry(
+                            trader, symbol, bias, signal
+                        )
+                        if live_error:
+                            error_msg = f"🚨 [{name}] {base}: {live_error}"
+                            print(error_msg); tg(error_msg)
+                        if fill is None:
                             entered = False
+                            atomic_write_json(ENTRY_STATE_FILE, {
+                                "entered": False, "symbol": symbol, "bias": bias,
+                                "entry": 0, "sl": live_stop,
+                                "time": datetime.now(timezone.utc).isoformat(),
+                            })
+                            continue
+                        entry_price = fill.price
+                        stop_loss = live_stop
+                        if live_error:
+                            # Emergency-Close ist fehlgeschlagen: keine zweite
+                            # Position riskieren, State für manuelle Recovery halten.
+                            atomic_write_json(ENTRY_STATE_FILE, {
+                                "entered": True, "symbol": symbol, "bias": bias,
+                                "entry": entry_price, "sl": stop_loss,
+                                "time": datetime.now(timezone.utc).isoformat(),
+                                "error": live_error,
+                            })
+                            return
+
+                    # Erst nach bestätigtem DRY_RUN-Entry bzw. geschütztem LIVE-Fill loggen.
+                    _log_trade("entry", symbol=symbol, base=base, bias=bias,
+                               price=entry_price, ema20=signal.ema20,
+                               stop_loss=stop_loss, mode=mode, session=name,
+                               vol_ratio=round(vol_ratio, 2))
+                    entry_msg = (
+                        f"🎯 {mode} ENTRY {bias} {base}\n"
+                        f"   Price:  {entry_price:.8f}\n"
+                        f"   EMA20:  {signal.ema20:.8f}\n"
+                        f"   Dist:   {signal.distance_pct:.2f}%\n"
+                        f"   Vol:    {vol_ratio:.2f}x\n"
+                        f"   SL:     {stop_loss:.8f}\n"
+                        f"   Grund:  {signal.reasoning}"
+                    )
+                    print(entry_msg); tg(entry_msg)
+                    entry_engine.increment_step(symbol)
 
                     atomic_write_json(ENTRY_STATE_FILE, {
                         "entered": entered, "symbol": symbol, "bias": bias,
@@ -613,7 +750,7 @@ def main():
     else:
         # LIVE: echter Watcher mit Exit-Engine
         from watcher import Watcher, TrackedPosition
-        watcher = Watcher()
+        watcher = Watcher(trader)
         tracked = TrackedPosition(
             symbol=symbol, side=bias.lower(),
             entry_price=entry_price, stop_loss=stop_loss,
@@ -662,10 +799,17 @@ def main():
                         tracked.pattern_exit_done = True
                         current_step = 2
                         watcher.add_position(tracked)
-                        from trader import KrakenTrader
-                        trader2 = KrakenTrader()
-                        trader2.close_position(symbol, bias.lower(), close_pct=0.5)
-                        trader2.set_stop_loss(symbol, bias.lower(), entry_price)
+                        if trader is not None:
+                            status, error = _execute_live_partial_exit(
+                                trader, symbol, bias, entry_price
+                            )
+                            if error:
+                                error_msg = f"🚨 [{name}] {base}: {error}"
+                                print(error_msg); tg(error_msg)
+                        if trader is not None and status not in {"protected", "closed"}:
+                            entered = False
+                            watcher.remove_position(symbol)
+                            break
                         print(f"  → 50% geschlossen + SL auf Break-Even + Trailing aktiv: {entry_price:.6f}")
 
                     elif sig.reason in (ExitReason.EMA_OVEREXTENDED, ExitReason.SR_REACHED,
@@ -679,9 +823,11 @@ def main():
                             f"   Info:   {sig.message}"
                         )
                         print(exit_msg); tg(exit_msg)
-                        from trader import KrakenTrader
-                        trader2 = KrakenTrader()
-                        trader2.close_position(symbol, bias.lower())
+                        if trader is not None:
+                            result = trader.close_position(symbol, bias.lower())
+                            if not result.success:
+                                err_msg = f"🚨 [{name}] {base}: Stop-Close fehlgeschlagen — {result.message}"
+                                print(err_msg); tg(err_msg)
                         entered = False
                         watcher.remove_position(symbol)
                         break
@@ -703,9 +849,11 @@ def main():
                                 f"   Info:   Trailing getriggert @ {tracked.trailing_price:.6f}"
                             )
                             print(trail_msg); tg(trail_msg)
-                            from trader import KrakenTrader
-                            trader2 = KrakenTrader()
-                            trader2.close_position(symbol, bias.lower())
+                            if trader is not None:
+                                result = trader.close_position(symbol, bias.lower())
+                                if not result.success:
+                                    err_msg = f"🚨 [{name}] {base}: Trailing-Close fehlgeschlagen — {result.message}"
+                                    print(err_msg); tg(err_msg)
                             entered = False
                             watcher.remove_position(symbol)
                             break
@@ -716,16 +864,8 @@ def main():
             time.sleep(30)
 
         # LIVE Session-Ende
-        if entered:
-            _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                       reason="session_end", close_pct=100, pnl_pct=0,
-                       price=0, rsi=0, session=name)
-            end_msg = f"📤 {mode} EXIT 100% {bias} {base}\n   Level:  3/3 — session_end\n   Info:   Session-Ende → Zwangsschluss"
-            print(end_msg); tg(end_msg)
+        if entered and trader is not None:
             results = watcher.close_all_session_end()
-            if not results:
-                trader = KrakenTrader()
-                trader.close_position(symbol, bias.lower())
 
     # ─── Session End (beide Modi) ────────────────────────────────
 

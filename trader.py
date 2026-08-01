@@ -126,10 +126,14 @@ class KrakenTrader:
             ticker = ex.fetch_ticker(symbol)
             price = float(ticker["last"])
             contract_size = float(market.get("contractSize", 1) or 1)
-            contracts = usd_amount / (price * contract_size)
-            min_amount = market.get("limits", {}).get("amount", {}).get("min", 1) or 1
-            if contracts < min_amount:
-                print(f"[Trader] {symbol}: ${usd_amount:.2f} → {contracts:.6f} Contracts < min {min_amount}. Abbruch.")
+            raw_contracts = usd_amount / (price * contract_size)
+            min_amount = market.get("limits", {}).get("amount", {}).get("min")
+            if min_amount is not None and raw_contracts < float(min_amount):
+                print(f"[Trader] {symbol}: ${usd_amount:.2f} → {raw_contracts:.6f} Contracts < min {min_amount}. Abbruch.")
+                return 0.0
+            contracts = float(ex.amount_to_precision(symbol, raw_contracts))
+            if contracts <= 0:
+                print(f"[Trader] {symbol}: ${usd_amount:.2f} unter Amount-Precision. Abbruch.")
                 return 0.0
             return contracts
         except Exception as e:
@@ -235,6 +239,18 @@ class KrakenTrader:
         except Exception as e:
             print(f"[Trader] _cancel_stop_orders {symbol}: {e}")
 
+    def _current_stop_order_id(self, symbol: str) -> Optional[str]:
+        """Return the id of the existing reduceOnly stop, if any."""
+        try:
+            ex = self._get_exchange()
+            orders = ex.fetch_open_orders(symbol)
+            for o in orders:
+                if o.get("reduceOnly") and "stop" in str(o.get("type", "")).lower():
+                    return str(o.get("id", "")) or None
+            return None
+        except Exception:
+            return None
+
     def _price_precision(self, symbol: str) -> int:
         """Anzahl Dezimalstellen für Preis-Tick."""
         try:
@@ -263,12 +279,14 @@ class KrakenTrader:
             ex = self._get_exchange()
             ex.load_markets()
 
-            # Cancel old SL first
-            self._cancel_stop_orders(symbol)
-
             # Round to market precision
             ndigits = self._price_precision(symbol)
             sl_rounded = round(stop_price, ndigits)
+
+            # Identify the existing SL so it can be cancelled only after the
+            # new SL is accepted. Keeps the previous reduceOnly protection in
+            # place if the new submit fails.
+            old_stop_id = self._current_stop_order_id(symbol)
 
             # Get position size — match side
             if amount is None or amount <= 0:
@@ -284,13 +302,27 @@ class KrakenTrader:
                 print(f"[Trader] SL: Keine Position für {symbol}")
                 return False
 
-            # Stop order: buy for short, sell for long
+            # New SL is placed first; only cancelled on success so a failed
+            # submit leaves the previous reduceOnly protection active.
             stop_side = "buy" if side == "short" else "sell"
 
-            order = ex.create_order(
-                symbol, "stop", stop_side, amount, sl_rounded,
-                {"stopPrice": sl_rounded, "reduceOnly": True}
-            )
+            try:
+                order = ex.create_order(
+                    symbol, "stop", stop_side, amount, None,
+                    {
+                        "stopPrice": sl_rounded,
+                        "reduceOnly": True,
+                        "triggerSignal": "mark",
+                    }
+                )
+            except Exception as exc:
+                print(f"[Trader] SL-Fehler bei {symbol}: {exc}")
+                return False
+
+            try:
+                ex.cancel_order(old_stop_id, symbol)
+            except Exception as exc:
+                print(f"[Trader] Alten SL nicht abgebrochen, neuer aktiv: {exc}")
             print(f"[Trader] SL gesetzt: {symbol} {amount} @ {sl_rounded} | ID: {order.get('id')}")
             return True
 
@@ -312,8 +344,8 @@ class KrakenTrader:
             ex = self._get_exchange()
             ex.load_markets()
 
-            # Cancel SL first
-            self._cancel_stop_orders(symbol)
+            # Der bestehende reduceOnly-SL bleibt bis zum bestätigten Market-
+            # Close aktiv. So bleibt die Position auch bei Order-Fehler geschützt.
 
             # Get position — match side
             positions = ex.fetch_positions([symbol])
@@ -337,6 +369,9 @@ class KrakenTrader:
             else:
                 order = ex.create_market_buy_order(symbol, close_size, {"reduceOnly": True})
 
+            if close_pct >= 0.999:
+                self._cancel_stop_orders(symbol)
+
             avg_price = float(order.get("average", order.get("price", 0)) or 0)
             pct_text = f"{int(close_pct*100)}%"
             print(f"[Trader] CLOSE {pct_text} {symbol}: {close_size} @ {avg_price:.6f}")
@@ -353,11 +388,15 @@ class KrakenTrader:
     def has_api_keys(self) -> bool:
         return bool(KRAKEN_KEY and KRAKEN_SECRET)
 
-    def get_open_positions(self) -> list:
+    def get_open_positions(self, strict: bool = False) -> list:
         if not self.has_api_keys():
+            if strict:
+                raise RuntimeError("Kraken API-Keys fehlen")
             return []
         try:
             return self._get_exchange().fetch_positions()
         except Exception as e:
             print(f"[Trader] fetch_positions error: {e}")
+            if strict:
+                raise RuntimeError(f"Kraken Positionsabruf fehlgeschlagen: {e}") from e
             return []
