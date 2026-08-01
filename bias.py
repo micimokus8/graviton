@@ -273,6 +273,24 @@ class BiasAnalyzer:
 
         signal_count = max(bullish, bearish)  # 3 = 3/3, 2 = 2/3
 
+        # ── Volumen-Filter: Session muss mind. so aktiv sein wie normal ──
+        # Verhindert Drift-Trades auf toten Coins (Vol 0.0x–0.1x)
+        # ONDO/BCH/ADA hatten alle Vol 0.0x und kamen nie über +1%
+        MIN_SESSION_VOL_RATIO = self._cfg.bias.get("min_session_vol_ratio", 1.0) \
+            if hasattr(self._cfg, 'bias') else 1.0
+        if session_vol_ratio < MIN_SESSION_VOL_RATIO:
+            return BiasResult(
+                symbol=symbol, bias="NOISE",
+                session_open_price=session_open_price,
+                current_price=current_price,
+                session_chg_pct=session_chg_pct,
+                session_vol_ratio=session_vol_ratio,
+                candles_analyzed=n,
+                green_candles=green, red_candles=red,
+                signal_count=0,
+                reason=f"NOISE (Vol {session_vol_ratio:.2f}x < {MIN_SESSION_VOL_RATIO:.1f}x) — keine Session-Aktivität | {tf_detail}"
+            )
+
         # ── 2-von-3 Regel ────────────────────────────────────────
         if bullish >= 2:
             return BiasResult(

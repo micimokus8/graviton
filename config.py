@@ -60,10 +60,11 @@ SCAN = {
 # ─── Bias ──────────────────────────────────────────────────────────
 
 BIAS = {
-    "timeframe":      "15m",
-    "min_candles":    4,           # 4 Kerzen = 1h Daten (v2)
-    "rsi_long_max":   80,          # wird nur noch vom Entry-Check genutzt
-    "rsi_short_min":  20,
+    "timeframe":              "15m",
+    "min_candles":           4,           # 4 Kerzen = 1h Daten (v2)
+    "rsi_long_max":          80,          # wird nur noch vom Entry-Check genutzt
+    "rsi_short_min":         20,
+    "min_session_vol_ratio": 1.0,         # Session-Volumen muss ≥ Normaldurchschnitt
 }
 
 # ─── Entry ─────────────────────────────────────────────────────────
