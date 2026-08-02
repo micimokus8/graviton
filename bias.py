@@ -293,8 +293,17 @@ class BiasAnalyzer:
                 reason=f"NOISE (Datenfehler: {'; '.join(tf_errors)}) | {tf_detail}",
             )
 
-        # Volumen-Info
-        vol_note = f"(Vol {session_vol_ratio:.1f}x)" if session_vol_ratio > 0 else ""
+        # Volumen-Info: nur anzeigen, wenn mind. eine geschlossene
+        # Session-Candle ausgewertet wurde, sonst fehlt jede Auswertungsgrundlage.
+        if n > 0:
+            vol_note = f"(Vol {session_vol_ratio:.1f}x)"
+        else:
+            vol_note = ""
+
+        # Session-Change nur anzeigen, wenn eine echte Session-Candle
+        # zur Berechnung beigetragen hat. Bei n=0 wäre die Differenz 0,0%
+        # und inhaltlich irreführend.
+        chg_note = f"Session {session_chg_pct:+.1f}% " if n > 0 else ""
 
         signal_count = max(bullish, bearish)  # 3 = 3/3, 2 = 2/3
 
@@ -327,7 +336,7 @@ class BiasAnalyzer:
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
                 signal_count=signal_count,
-                reason=f"LONG ({bullish}/3) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
+                reason=f"LONG ({bullish}/3) {tf_detail} | {chg_note}{vol_note}"
             )
 
         if bearish >= 2:
@@ -340,7 +349,7 @@ class BiasAnalyzer:
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
                 signal_count=signal_count,
-                reason=f"SHORT ({bearish}/3) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
+                reason=f"SHORT ({bearish}/3) {tf_detail} | {chg_note}{vol_note}"
             )
 
         # Kein Konsens: NOISE
@@ -353,7 +362,7 @@ class BiasAnalyzer:
             candles_analyzed=n,
             green_candles=green, red_candles=red,
             signal_count=0,
-            reason=f"NOISE ({bullish}B/{bearish}S/{neutral}N) {tf_detail} | Session {session_chg_pct:+.1f}% {vol_note}"
+            reason=f"NOISE ({bullish}B/{bearish}S/{neutral}N) {tf_detail} | {chg_note}{vol_note}"
         )
 
 
