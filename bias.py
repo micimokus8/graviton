@@ -31,6 +31,7 @@ import numpy as np
 import ccxt
 
 from candle_utils import closed_ohlcv
+from volume_metrics import _session_volume_ratio
 
 
 # ─── BiasResult ──────────────────────────────────────────────────────
@@ -247,10 +248,13 @@ class BiasAnalyzer:
         current_price = float(closes[-1])
         session_chg_pct = (current_price - session_open_price) / session_open_price * 100
 
-        # Volumen-Info
-        avg_session_vol = float(np.mean(volumes[idx])) if n > 0 else 0
-        avg_baseline_vol = max(float(np.mean(volumes[-20:])), 0.001)
-        session_vol_ratio = avg_session_vol / avg_baseline_vol
+        # Volumen-Info: getrennte Median-Berechnung aus volume_metrics
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        _, _, session_vol_ratio = _session_volume_ratio(
+            data, session_open_ts, now_ms
+        )
+        # Bottom-Limit bei 0 (Rausch) und Top-Limit bei 5 (irrelevante übermäßige Aktivität).
+        session_vol_ratio = max(0.0, min(5.0, session_vol_ratio))
 
         green = sum(1 for i in range(n) if closes[idx[i]] > opens[idx[i]])
         red = n - green
