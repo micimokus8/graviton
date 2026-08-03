@@ -296,21 +296,13 @@ class EntryEngine:
         # Distanz zur EMA
         distance_pct = abs(current_price - current_ema) / current_ema * 100
 
-        # EMA-Positions-Check: Preis muss auf richtiger Seite sein
-        side_ok, side_reason = self._is_correct_side(current_price, current_ema, bias)
-        if not side_ok:
-            signal = EntrySignal(
-                symbol=symbol, bias=bias, state=EntryState.NO_ENTRY,
-                price=round(current_price, 6), ema20=round(current_ema, 6),
-                distance_pct=round(distance_pct, 4),
-                rejection=False, rejection_high=0, rejection_low=0,
-                rejection_close=0, entry_price=0, stop_loss=0,
-                step=current_step, reasoning=side_reason,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-            return signal
-
-        # ─── State Machine ─────────────────────────────────────
+        # ─── State Machine ──────────────────────────────────────
+        # Ein Pullback darf die EMA20 kurzfristig unterschreiten (LONG)
+        # bzw. überschreiten (SHORT). Die alte Seitenprüfung an dieser Stelle
+        # hat genau solche Pullbacks vor der Rejection-Prüfung verworfen.
+        # Die Richtung wird weiterhin durch Bias + bestätigte 5m-Rejection
+        # und Volumen bestätigt; ein weiter entfernter Preis bleibt unten
+        # WAITING/APPROACHING.
 
         signal = EntrySignal(
             symbol=symbol,
