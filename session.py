@@ -472,6 +472,10 @@ def _run_session(session_key: str):
     cycle = 0
     while _now_ts() < int(entry_deadline.timestamp() * 1000) - 30_000:
         cycle += 1
+        # Alle Kandidaten dieses Zyklus zuerst prüfen. Danach gewinnt der
+        # aktuell EMA-nächste gültige Kandidat — die Bias-Stärke bleibt nur
+        # über die stabile Kandidatenliste als Tie-Breaker erhalten.
+        cycle_signals = []
         for cand in active_candidates:
             symbol = cand["symbol"]
             bias = cand["bias"]
@@ -494,100 +498,94 @@ def _run_session(session_key: str):
                 _log_debug(cycle, base, bias, state_name, reason,
                            price=round(signal.price, 6), ema20=round(signal.ema20, 6),
                            dist=round(signal.distance_pct, 3))
-
-                if signal.state == EntryState.ENTERED:
-                    # S/R kann sich seit dem Bias-Snapshot verschoben haben.
-                    # Deshalb direkt am tatsächlichen Entry-Preis erneut prüfen.
-                    entry_sr_blocked, entry_sr_reason, _ = check_sr_for_entry(
-                        symbol, signal.entry_price, bias
-                    )
-                    if entry_sr_blocked:
-                        print(f"  [{_ts_str()}] {base}: S/R am Entry blockiert — {entry_sr_reason}")
-                        _log_debug(
-                            cycle, base, bias, "sr_blocked_at_entry", entry_sr_reason,
-                            price=signal.entry_price,
-                        )
-                        continue
-
-                    # ── BTC-Korrelations-Check ──
-                    btc_trend = _check_btc_1m_trend()
-                    btc_blocked = (bias == "LONG" and btc_trend == "down") or \
-                                  (bias == "SHORT" and btc_trend == "up")
-                    if btc_blocked:
-                        print(f"  [{_ts_str()}] {base}: BTC 1m {'bearish' if bias == 'LONG' else 'bullish'} — skip")
-                        continue
-
-                    vol_ratio = cand.get("session_vol_ratio", 0)
-                    entered = True
-                    entry_price = signal.entry_price
-                    stop_loss = signal.stop_loss
-
-                    if not DRY_RUN:
-                        fill, live_stop, live_error = _execute_live_entry(
-                            trader, symbol, bias, signal
-                        )
-                        if live_error:
-                            error_msg = f"🚨 [{name}] {base}: {live_error}"
-                            print(error_msg); tg(error_msg)
-                        if fill is None:
-                            entered = False
-                            atomic_write_json(ENTRY_STATE_FILE, {
-                                "entered": False, "symbol": symbol, "bias": bias,
-                                "entry": 0, "sl": live_stop,
-                                "time": datetime.now(timezone.utc).isoformat(),
-                            })
-                            continue
-                        entry_price = fill.price
-                        stop_loss = live_stop
-                        if live_error:
-                            # Emergency-Close ist fehlgeschlagen: keine zweite
-                            # Position riskieren, State für manuelle Recovery halten.
-                            atomic_write_json(ENTRY_STATE_FILE, {
-                                "entered": True, "symbol": symbol, "bias": bias,
-                                "entry": entry_price, "sl": stop_loss,
-                                "time": datetime.now(timezone.utc).isoformat(),
-                                "error": live_error,
-                            })
-                            return
-
-                    # Erst nach bestätigtem DRY_RUN-Entry bzw. geschütztem LIVE-Fill loggen.
-                    _log_trade("entry", symbol=symbol, base=base, bias=bias,
-                               price=entry_price, ema20=signal.ema20,
-                               stop_loss=stop_loss, mode=mode, session=name,
-                               vol_ratio=round(vol_ratio, 2))
-                    entry_msg = (
-                        f"🎯 {mode} ENTRY {bias} {base}\n"
-                        f"   Price:  {entry_price:.8f}\n"
-                        f"   EMA20:  {signal.ema20:.8f}\n"
-                        f"   Dist:   {signal.distance_pct:.2f}%\n"
-                        f"   Vol:    {vol_ratio:.2f}x\n"
-                        f"   SL:     {stop_loss:.8f}\n"
-                        f"   Grund:  {signal.reasoning}"
-                    )
-                    print(entry_msg); tg(entry_msg)
-                    entry_engine.increment_step(symbol)
-
-                    atomic_write_json(ENTRY_STATE_FILE, {
-                        "entered": entered, "symbol": symbol, "bias": bias,
-                        "entry": entry_price, "sl": stop_loss,
-                        "time": datetime.now(timezone.utc).isoformat(),
-                    })
-                    break  # inner loop (candidates)
-
-                elif signal.state == EntryState.AT_EMA:
-                    now_sec = time.time()
-                    if now_sec - last_status_msg > 300:
-                        print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
-                        last_status_msg = now_sec
-
-                elif signal.state in (EntryState.WAITING, EntryState.APPROACHING):
-                    pass  # kein Output — zu viel Spam bei 8 Coins
-
+                cycle_signals.append((cand, signal))
             except Exception as e:
                 print(f"  {base}: Entry-Fehler — {e}")
 
-            if entered:
-                break  # outer while loop
+        cycle_signals.sort(key=lambda item: item[1].distance_pct)
+        for cand, signal in cycle_signals:
+            symbol = cand["symbol"]
+            bias = cand["bias"]
+            base = _base(cand)
+
+            if signal.state == EntryState.ENTERED:
+                # S/R kann sich seit dem Bias-Snapshot verschoben haben.
+                # Deshalb direkt am tatsächlichen Entry-Preis erneut prüfen.
+                entry_sr_blocked, entry_sr_reason, _ = check_sr_for_entry(
+                    symbol, signal.entry_price, bias
+                )
+                if entry_sr_blocked:
+                    print(f"  [{_ts_str()}] {base}: S/R am Entry blockiert — {entry_sr_reason}")
+                    _log_debug(
+                        cycle, base, bias, "sr_blocked_at_entry", entry_sr_reason,
+                        price=signal.entry_price,
+                    )
+                    continue
+
+                # ── BTC-Korrelations-Check ──
+                btc_trend = _check_btc_1m_trend()
+                btc_blocked = (bias == "LONG" and btc_trend == "down") or \
+                              (bias == "SHORT" and btc_trend == "up")
+                if btc_blocked:
+                    print(f"  [{_ts_str()}] {base}: BTC 1m {'bearish' if bias == 'LONG' else 'bullish'} — skip")
+                    continue
+
+                vol_ratio = cand.get("session_vol_ratio", 0)
+                entered = True
+                entry_price = signal.entry_price
+                stop_loss = signal.stop_loss
+
+                if not DRY_RUN:
+                    fill, live_stop, live_error = _execute_live_entry(
+                        trader, symbol, bias, signal
+                    )
+                    if live_error:
+                        error_msg = f"🚨 [{name}] {base}: {live_error}"
+                        print(error_msg); tg(error_msg)
+                    if fill is None:
+                        entered = False
+                        atomic_write_json(ENTRY_STATE_FILE, {
+                            "entered": False, "symbol": symbol, "bias": bias,
+                            "entry": 0, "sl": live_stop,
+                            "time": datetime.now(timezone.utc).isoformat(),
+                        })
+                        continue
+                    entry_price = fill.price
+                    stop_loss = live_stop
+                    if live_error:
+                        # Emergency-Close ist fehlgeschlagen: keine zweite
+                        # Position riskieren, State für manuelle Recovery halten.
+                        atomic_write_json(ENTRY_STATE_FILE, {
+                            "entered": True, "symbol": symbol, "bias": bias,
+                            "entry": entry_price, "sl": stop_loss,
+                            "time": datetime.now(timezone.utc).isoformat(),
+                            "error": live_error,
+                        })
+                        return
+
+                # Erst nach bestätigtem DRY_RUN-Entry bzw. geschütztem LIVE-Fill loggen.
+                _log_trade("entry", symbol=symbol, base=base, bias=bias,
+                           price=entry_price, ema20=signal.ema20,
+                           stop_loss=stop_loss, mode=mode, session=name,
+                           vol_ratio=round(vol_ratio, 2))
+                entry_msg = (
+                    f"🎯 {mode} ENTRY {bias} {base}\n"
+                    f"   Price:  {entry_price:.8f}\n"
+                    f"   EMA20:  {signal.ema20:.8f}\n"
+                    f"   Dist:   {signal.distance_pct:.2f}%\n"
+                    f"   Vol:    {vol_ratio:.2f}x\n"
+                    f"   SL:     {stop_loss:.8f}\n"
+                    f"   Grund:  {signal.reasoning}"
+                )
+                print(entry_msg); tg(entry_msg)
+                entry_engine.increment_step(symbol)
+
+                atomic_write_json(ENTRY_STATE_FILE, {
+                    "entered": entered, "symbol": symbol, "bias": bias,
+                    "entry": entry_price, "sl": stop_loss,
+                    "time": datetime.now(timezone.utc).isoformat(),
+                })
+                break  # inner loop (candidates)
 
         if entered:
             break
