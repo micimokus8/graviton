@@ -337,33 +337,51 @@ class EntryEngine:
         # umgeht die Rejection+Volumen-Bestätigung komplett.
         # Jeder Entry MUSS jetzt über die Rejection-Kerze unten laufen.
 
-        # Rejection-Prüfung auf 5m Kerze (statt 1m — 1m zu verrauscht)
+        # Rejection auf den letzten drei *geschlossenen* 5m-Kerzen prüfen.
+        # Nur die allerletzte Kerze zu akzeptieren verpasst gültige Pullbacks:
+        # die Folgekerze kann bereits wieder von der EMA weg laufen.
         try:
-            data_5m = self._fetch_1m(symbol, limit=30, tf="5m")  # 5m data
-            o5, h5, l5, c5 = data_5m[:, 1], data_5m[:, 2], data_5m[:, 3], data_5m[:, 4]
-            v5 = data_5m[:, 5]
-            last_open5, last_high5 = float(o5[-1]), float(h5[-1])
-            last_low5, last_close5 = float(l5[-1]), float(c5[-1])
-            last_vol5 = float(v5[-1])
+            data_5m = data
+            if len(data_5m) < 12:
+                return signal
 
-            is_rejection = self._is_rejection_candle(
-                last_open5, last_high5, last_low5, last_close5,
-                current_ema, bias,
-            )
+            recent_start = max(0, len(data_5m) - 3)
+            for idx in range(len(data_5m) - 1, recent_start - 1, -1):
+                open5, high5, low5, close5, volume5 = map(
+                    float, data_5m[idx, 1:6]
+                )
+                if not self._is_rejection_candle(
+                    open5, high5, low5, close5, current_ema, bias
+                ):
+                    continue
 
-            if is_rejection:
-                if len(v5) >= 12:
-                    avg_vol = float(np.mean(v5[-12:-2]))
-                    if last_vol5 >= avg_vol * 1.2:
-                        signal.entry_price = last_close5
-                        sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
-                        if bias == "LONG":
-                            signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 8)
-                        else:
-                            signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 8)
-                        signal.state = EntryState.ENTERED
-                        signal.reasoning = f"Pullback: 5m Rejection an EMA ({distance_pct:.2f}%)"
-                        return signal
+                # Letzte Kerze: Originalbestätigung. Ältere der letzten
+                # drei: mindestens normales Volumen, weil die Rejection
+                # bereits durch eine Folgekerze bestätigt wurde.
+                avg_start = max(0, idx - 10)
+                avg_vol = float(np.mean(data_5m[avg_start:idx, 5]))
+                required_ratio = 1.2 if idx == len(data_5m) - 1 else 1.0
+                if avg_vol <= 0 or volume5 < avg_vol * required_ratio:
+                    continue
+
+                # Kein verspäteter Einstieg: Auch der aktuelle Preis muss
+                # noch nahe an EMA20 liegen.
+                if distance_pct > max_dist:
+                    continue
+
+                signal.entry_price = close5
+                sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
+                if bias == "LONG":
+                    signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 8)
+                else:
+                    signal.stop_loss = round(signal.entry_price * (1 + sl_pct / 100), 8)
+                signal.state = EntryState.ENTERED
+                age = len(data_5m) - 1 - idx
+                signal.reasoning = (
+                    f"Pullback: 5m Rejection an EMA ({distance_pct:.2f}%, "
+                    f"{age} Kerze(n) zurück)"
+                )
+                return signal
         except Exception:
             pass
         return signal
