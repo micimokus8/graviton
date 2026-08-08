@@ -499,6 +499,12 @@ def _run_session(session_key: str):
                            price=round(signal.price, 6), ema20=round(signal.ema20, 6),
                            dist=round(signal.distance_pct, 3))
                 cycle_signals.append((cand, signal))
+
+                if signal.state == EntryState.AT_EMA:
+                    now_sec = time.time()
+                    if now_sec - last_status_msg > 300:
+                        print(f"  [{_ts_str()}] {base} an EMA ({signal.distance_pct:.2f}%)...")
+                        last_status_msg = now_sec
             except Exception as e:
                 print(f"  {base}: Entry-Fehler — {e}")
 
