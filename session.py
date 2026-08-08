@@ -35,7 +35,7 @@ TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
 DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
 WATCHLIST_MAX_AGE_SECONDS = 45 * 60
 BIAS_MAX_AGE_SECONDS = 15 * 60
-
+ENTRY_WINDOW_SECONDS = 15 * 60
 
 
 
@@ -56,6 +56,12 @@ def _state_file_fresh(
     reference = time.time() if now_ts is None else now_ts
     age = reference - path.stat().st_mtime
     return -5 <= age <= max_age_seconds
+
+
+def _entry_deadline(bias_file: Path, close_dt: datetime) -> datetime:
+    """Hard deadline for opening a new position from this bias snapshot."""
+    bias_written_at = datetime.fromtimestamp(bias_file.stat().st_mtime, tz=timezone.utc)
+    return min(close_dt, bias_written_at + timedelta(seconds=ENTRY_WINDOW_SECONDS))
 
 
 def _state_symbols_match(watchlist: list[dict], bias_results: list[dict]) -> bool:
@@ -387,6 +393,12 @@ def _run_session(session_key: str):
         print(msg); tg(msg)
         return
 
+    entry_deadline = _entry_deadline(bias_file, close_dt)
+    print(
+        f"⏱ [{name}] Entry-Fenster bis {entry_deadline.strftime('%H:%M UTC')} "
+        f"(max. {ENTRY_WINDOW_SECONDS // 60} Min nach Bias)"
+    )
+
     candidates = [r for r in bias_results if r["bias"] in ("LONG", "SHORT")]
 
     # Bias Telegram
@@ -458,7 +470,7 @@ def _run_session(session_key: str):
     print(f"   Rotiere alle 30s — erster mit Pullback gewinnt")
 
     cycle = 0
-    while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
+    while _now_ts() < int(entry_deadline.timestamp() * 1000) - 30_000:
         cycle += 1
         for cand in active_candidates:
             symbol = cand["symbol"]
@@ -600,7 +612,7 @@ def _run_session(session_key: str):
                     summary_reasons.append(f"{_base(cand)}: {sig.state}")
             except Exception as e:
                 summary_reasons.append(f"{_base(cand)}: Fehler — {e}")
-        msg = f"⏱ [{name}] Kein Entry — {len(active_candidates)} Coins geprüft, {cycle} Cycles\n"
+        msg = f"⏱ [{name}] Kein Entry im Bias-Fenster — {len(active_candidates)} Coins geprüft, {cycle} Cycles\n"
         for r in summary_reasons:
             msg += f"   {r}\n"
         print(msg); tg(msg)
