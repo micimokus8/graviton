@@ -35,7 +35,7 @@ TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
 DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
 WATCHLIST_MAX_AGE_SECONDS = 45 * 60
 BIAS_MAX_AGE_SECONDS = 15 * 60
-ENTRY_WINDOW_SECONDS = 15 * 60
+ENTRY_WINDOW_SECONDS = 20 * 60
 
 
 
