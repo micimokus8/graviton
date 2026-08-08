@@ -347,29 +347,24 @@ class EntryEngine:
 
             recent_start = max(0, len(data_5m) - 3)
             for idx in range(len(data_5m) - 1, recent_start - 1, -1):
-                open5, high5, low5, close5, volume5 = map(
-                    float, data_5m[idx, 1:6]
+                open5, high5, low5, close5 = map(
+                    float, data_5m[idx, 1:5]
                 )
                 if not self._is_rejection_candle(
                     open5, high5, low5, close5, current_ema, bias
                 ):
                     continue
 
-                # Letzte Kerze: Originalbestätigung. Ältere der letzten
-                # drei: mindestens normales Volumen, weil die Rejection
-                # bereits durch eine Folgekerze bestätigt wurde.
-                avg_start = max(0, idx - 10)
-                avg_vol = float(np.mean(data_5m[avg_start:idx, 5]))
-                required_ratio = 1.2 if idx == len(data_5m) - 1 else 1.0
-                if avg_vol <= 0 or volume5 < avg_vol * required_ratio:
-                    continue
-
-                # Kein verspäteter Einstieg: Auch der aktuelle Preis muss
-                # noch nahe an EMA20 liegen.
+                # Volumen gehört ausschließlich in Scan/Bias. Der Entry
+                # entscheidet hier nur noch: gab es kürzlich einen
+                # bestätigten EMA-Pullback und ist der aktuelle Preis noch
+                # nahe genug an EMA20?
                 if distance_pct > max_dist:
                     continue
 
-                signal.entry_price = close5
+                # Nicht zum alten Kerzenschluss kaufen: Die Rejection ist
+                # nur der Trigger, ausgeführt wird zum aktuellen Marktpreis.
+                signal.entry_price = current_price
                 sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
                 if bias == "LONG":
                     signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 8)

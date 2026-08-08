@@ -43,7 +43,7 @@ class EntryPullbackTests(unittest.TestCase):
         for i in range(30):
             candles.append([i * 300_000, 99.8, 99.9, 99.7, 99.8, 100.0])
         candles[-2] = [28 * 300_000, 99.60, 99.80, 99.55, 99.70, 105.0]
-        candles[-1] = [29 * 300_000, 99.70, 99.90, 99.65, 99.82, 100.0]
+        candles[-1] = [29 * 300_000, 99.85, 99.90, 99.75, 99.82, 100.0]
 
         engine = EntryEngine()
         engine._exchange = _PullbackExchange(candles)
@@ -53,6 +53,7 @@ class EntryPullbackTests(unittest.TestCase):
 
         self.assertEqual(signal.state, EntryState.ENTERED)
         self.assertIn("1 Kerze(n) zurück", signal.reasoning)
+        self.assertAlmostEqual(signal.entry_price, 99.82)
 
 
 if __name__ == "__main__":
