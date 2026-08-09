@@ -6,8 +6,8 @@
 
 Graviton trades crypto perpetuals on Kraken by hunting momentum at
 the NY session open. It scans for coins with strong intraday moves (3%+ / 24h),
-determines directional bias from session-open momentum (first 15m candles),
-then enters on 1m timeframe when price touches the EMA20 line.
+determines directional bias from 4H/1H/15m EMA structure, then enters on a
+5m EMA20 pullback confirmed by a closed rejection candle.
 
 - **Sessions:** NY (13:30–16:00 UTC) and Asia (00:00–02:00 UTC)
 - **Exchange:** Kraken Perpetuals via CCXT (308 USD linear perps)
@@ -18,7 +18,7 @@ then enters on 1m timeframe when price touches the EMA20 line.
 ## Strategy
 
 ```
-Scan (30m before) → Bias (15m candle) → Entry (1m EMA20) → Exit (3 Levels)
+Scan → Bias (4H/1H/15m, 2-of-3) → Entry (5m EMA20 pullback) → Exit
 ```
 
 ### 1. Scan — Momentum Filter (30 min before session)
@@ -28,32 +28,42 @@ Scan (30m before) → Bias (15m candle) → Entry (1m EMA20) → Exit (3 Levels)
 - Max 8 coins on watchlist
 - Sorted by abs(change) descending
 
-### 2. Bias — Session Momentum (16 min after session open)
+### 2. Bias — Multi-Timeframe EMA Structure (13:45 UTC)
 
-The bias is purely session-based — it measures what the coin does **right now** since NY open, not what happened yesterday.
+The bias is calculated by the bias cron from closed candles on 4H, 1H and 15m.
+At least two of the three timeframes must agree:
 
-- **STRONG** (>2% session change + >1.5x average volume): Direction with RSI guard (RSI >80 blocks LONG, RSI <20 blocks SHORT)
-- **MODERATE** (1-2% session change + >0.8x average volume): Direction based on momentum
-- **WEAK** (<1% session change): NOISE — not enough movement to trade
-- Counts green vs red 15m candles in the first 3 candles after session open
-- No daily trend comparison — yesterday's candle is irrelevant for session-open momentum
+- **LONG:** at least 2× BULLISH
+- **SHORT:** at least 2× BEARISH
+- Otherwise: **NOISE** and no entry permission
+- Session volume is evaluated in the bias stage; it is not re-filtered in the entry engine
+- The session reads the bias snapshot and does not recalculate bias independently
 
-### 3. Entry — 1m EMA20 Touch (during session)
+### 3. Entry — 5m EMA20 Pullback (during the bounded bias window)
 
-Two entry modes, selected by RSI:
+There is only one active entry mode: a confirmed 5m EMA20 pullback. The former
+RSI-based Fast Entry was removed because it bypassed rejection confirmation.
 
-**Fast Entry (1m, RSI neutral):** Price touches EMA20 on 1m chart + RSI 30-65 (LONG) / 35-70 (SHORT) → **immediate entry.** No rejection candle required. Catches momentum moves before they accelerate away from EMA.
+Entry requires:
 
-**Rejection Entry (5m, RSI extreme):** Price touches EMA20 on 1m but RSI outside neutral range → waits for a **5m rejection candle** (green candle with low at EMA20 for LONG, red candle with high at EMA20 for SHORT) plus volume confirmation (>1.2x average). The 5m timeframe filters out single-wick noise and only accepts confirmed bounces.
+1. Current price is within the dynamic EMA20 distance band.
+2. One of the last three fully closed 5m candles confirms rejection:
+   - LONG: bullish candle with its low near EMA20
+   - SHORT: bearish candle with its high near EMA20
+3. The current price is still close enough to EMA20; the old rejection close is
+   not used as the fill price. Execution uses the current market price.
 
-Entry filters:
-- **1m EMA20 side check:** LONG only if price > 1m EMA20, SHORT only if price < 1m EMA20. Prevents entries on the wrong side of the micro-trend.
-- **1H EMA20 bias context:** shown in bias output for information (above/below/on), but does not block entry — the 1m EMA20 check is sufficient.
-- **Dynamic EMA distance:** Based on 24h coin change (<5% → 0.50%, 5-10% → 0.60%, >10% → 1.00%)
-- **Candidate rotation:** All non-S/R-blocked candidates polled in a 30s cycle — first with valid entry wins.
-- **S/R proximity:** If nearest S/R <0.5% away → fallback to best candidate if all blocked
-- **SL: 1.0× 1H ATR** (min 0.9%) — dynamic per coin volatility with more pullback room
-- 1 position per session, ~$100 (17.5% of equity)
+Entry behavior:
+
+- No new entry is allowed after **20 minutes from the bias file timestamp** or after session close.
+- All active candidates are checked every 30 seconds in each cycle.
+- The cycle checks every candidate first, then prioritizes the currently closest EMA20 signal.
+- 3/3 vs. 2/3 bias strength is retained as the stable tie-breaker.
+- S/R is checked before rotation and again at the actual entry price.
+- BTC 1m counter-trend correlation can skip an otherwise valid candidate.
+- Volume is handled by scan/bias, not duplicated as an entry filter.
+- Initial SL: `max(1.0 × 1H ATR, 0.9%)`.
+- One position per session, with the configured exposure limit.
 
 ### 4. Exit — 3 Levels
 
@@ -70,7 +80,7 @@ Every key event is delivered live via Telegram. DRY_RUN includes simulated exits
 ```
 🧠 [NY] Bias: 🟢 AAVE: LONG | RSI 67.9
 👁 [NY] Entry-Polling — 3 candidates (30s rotation)
-🎯 [DRY RUN] ENTRY LONG AAVE @ 96.11 | SL 94.64 | Fast Entry (RSI 55)
+🎯 [DRY RUN] ENTRY LONG AAVE @ 96.11 | SL 94.64 | Pullback: 5m Rejection an EMA
 📤 [DRY RUN] EXIT 100% LONG AAVE @ session_end | PnL: 🟢 +4.85%
 ✅ [NY] Session Ende
 ```
@@ -82,8 +92,8 @@ graviton/
 ├── session.py           # Full session runner (Bias → Entry → Watcher → Close)
 ├── config.py            # All parameters (sessions, filters, sizing, exit)
 ├── scanner.py           # Kraken Futures screener via CCXT
-├── bias.py              # 15m directional bias (Wilder's RSI)
-├── entry.py             # 1m EMA20 entry + Fast/Rejection modes
+├── bias.py              # 4H/1H/15m multi-timeframe bias (2-of-3)
+├── entry.py             # 5m EMA20 pullback + rejection entry
 ├── exit.py              # 3-level exit engine (Pattern / Structural / Session)
 ├── sr_levels.py         # Weekly/Daily support & resistance
 ├── patterns.py          # Candlestick pattern detection (ta-lib + pure fallback)
@@ -95,7 +105,7 @@ graviton/
 │   ├── graviton_session_ny.sh  # nohup session runner
 │   ├── graviton_bias_ny.sh     # standalone bias output
 │   └── scan_cron.sh
-├── data/                # Runtime data (watchlist, entry state, debug logs)
+├── data/                # Runtime data (watchlist, bias, entry state, debug logs)
 ├── logs/
 ├── requirements.txt
 ├── GravitonLogo.png
@@ -134,15 +144,16 @@ Set `DRY_RUN = False` in `config.py`. Start with dry-run for at least one week.
 ```
 Job              UTC     CEST    Description
 ───────────────  ──────  ──────  ───────────────────────────────
-NY Bias          14:01   16:01   16 min after open (1 × 15m candle)
-NY Session       14:02   16:02   Polling starts immediately after bias
-NY Scan (pre)    13:00   15:00   Writes watchlist for bias
+NY Scan (pre)    13:30   15:30   Writes watchlist for bias
+NY Bias          13:45   15:45   4H/1H/15m bias (2-of-3)
+NY Session       13:50   15:50   Polling starts; entries limited to 20 min after bias
 Asia Scan        23:30   01:30   Paused
 Asia Session     00:00   02:00   Paused
 ```
 
 - **Scan** saves watchlist to `data/watchlist.json`
-- **Bias** runs 16 min after session open
+- **Bias** runs at 13:45 UTC and writes the multi-timeframe snapshot
+- **Entry** uses only the bias snapshot; no independent bias recalculation
 - **Session** uses `nohup` to survive cron timeouts
 - Empty watchlist → session skips automatically
 
@@ -152,7 +163,7 @@ Asia Session     00:00   02:00   Paused
 
 ```json
 {"cycle":1, "base":"FARTCOIN", "state":"no_entry", "reason":"Preis -0.06% unter EMA20 — kein LONG"}
-{"cycle":2, "base":"AAVE", "state":"entered", "reason":"Fast Entry: an EMA20 (RSI 55, Dist 0.17%)"}
+{"cycle":2, "base":"AAVE", "state":"entered", "reason":"Pullback: 5m Rejection an EMA (0.17%, 0 Kerze(n) zurück)"}
 ```
 
 If no entry occurs, a Telegram summary explains why for each candidate.
@@ -163,11 +174,13 @@ If no entry occurs, a Telegram summary explains why for each candidate.
 |---------|-----|-------|-------------|
 | DRY_RUN | — | `True` | No live orders |
 | SESSIONS | ny/asia | 13:30/00:00 | Session open/close (UTC) |
-| SCAN | min/max_change_pct | 4.0 / 18.0 | 24h change filter |
-| SCAN | min_volume_eur | 750_000 | Min 24h volume |
-| BIAS | min_candles | 2 | Candles needed for bias |
+| SCAN | min/max_change_pct | 3.0 / 99.0 | 24h change filter (upper limit effectively disabled) |
+| SCAN | min_volume_eur | 500_000 | Min 24h volume |
+| BIAS | min_candles | 4 | Candles needed for bias |
+| BIAS | min_session_vol_ratio | 0.7 | Minimum session-volume ratio |
 | BIAS | rsi_long_max/short_min | 80 / 20 | RSI bias block |
 | ENTRY | ema_distance_max | 0.50 | Base EMA distance (scaled by 24h change) |
+| ENTRY | sl_offset_pct | 0.90 | Minimum initial SL; effective SL is max(1.0× 1H ATR, 0.9%) |
 | ENTRY | ema_period | 20 | EMA length |
 | SR | min_distance_pct | 0.50 | S/R entry block (fallback if all blocked) |
 | POSITION | account_risk_pct_per_coin | 17.5 | ~$100 at $570 equity |
@@ -179,10 +192,10 @@ If no entry occurs, a Telegram summary explains why for each candidate.
 
 | Change | Before | After | Reason |
 |--------|--------|-------|--------|
-| **Bias timing** | 31 min (2 candles) | **16 min** (1 candle) | +15 min entry time |
-| **Entry rotation** | Single coin, 2h loop | **All candidates, 30s cycle** | Fair chance for all |
-| **EMA side check** | None | **LONG > EMA20, SHORT < EMA20** | Prevent wrong-side entries |
-| **Fast Entry** | Always wait for rejection | **RSI neutral → immediate** | Catch momentum moves |
+| **Bias timing** | Session-momentum snapshot | **4H/1H/15m, 2-of-3** | Multi-timeframe directional confirmation |
+| **Entry rotation** | Single coin, 2h loop | **All candidates, 30s cycle** | Closest valid EMA20 signal first |
+| **Entry mode** | Fast Entry + rejection modes | **5m closed-candle rejection only** | No blind RSI entry |
+| **Entry window** | Until session close | **20 min after bias, capped by close** | Prevent stale-bias entries |
 | **SL** | 0.30× 1H ATR, min 0.3% | **1.0× 1H ATR, min 0.9%** | Wider SL for pullback noise |
 | **EMA distance** | Fixed 0.30% | **Dynamic 0.50-1.00%** | Adapt to volatility |
 | **S/R blocking** | Hard block → session end | **Fallback to best candidate** | Price moves during session |
