@@ -52,7 +52,7 @@ Entry filters:
 - **Dynamic EMA distance:** Based on 24h coin change (<5% → 0.50%, 5-10% → 0.60%, >10% → 1.00%)
 - **Candidate rotation:** All non-S/R-blocked candidates polled in a 30s cycle — first with valid entry wins.
 - **S/R proximity:** If nearest S/R <0.5% away → fallback to best candidate if all blocked
-- **SL: 0.75× 1H ATR** (min 0.6%) — dynamic per coin volatility
+- **SL: 1.0× 1H ATR** (min 0.9%) — dynamic per coin volatility with more pullback room
 - 1 position per session, ~$100 (17.5% of equity)
 
 ### 4. Exit — 3 Levels
@@ -183,7 +183,7 @@ If no entry occurs, a Telegram summary explains why for each candidate.
 | **Entry rotation** | Single coin, 2h loop | **All candidates, 30s cycle** | Fair chance for all |
 | **EMA side check** | None | **LONG > EMA20, SHORT < EMA20** | Prevent wrong-side entries |
 | **Fast Entry** | Always wait for rejection | **RSI neutral → immediate** | Catch momentum moves |
-| **SL** | 0.30× 1H ATR, min 0.3% | **0.75× 1H ATR, min 0.6%** | Wider SL for noise |
+| **SL** | 0.30× 1H ATR, min 0.3% | **1.0× 1H ATR, min 0.9%** | Wider SL for pullback noise |
 | **EMA distance** | Fixed 0.30% | **Dynamic 0.50-1.00%** | Adapt to volatility |
 | **S/R blocking** | Hard block → session end | **Fallback to best candidate** | Price moves during session |
 | **Debug logging** | trade_log.jsonl only | **session_debug.jsonl** per cycle | Post-mortem analysis |

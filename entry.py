@@ -200,7 +200,7 @@ class EntryEngine:
     # ─── SL-Prozent aus 1H ATR ────────────────────────────────
 
     def _calc_sl_pct(self, symbol: str, price: float) -> float:
-        """Berechnet SL-Prozent: 0.75× 1H ATR, min 0.6%."""
+        """Berechnet SL-Prozent: 1.0× 1H ATR, min 0.9%."""
         atr_1h_pct = 0.0
         try:
             ex = self._get_exchange()
@@ -219,7 +219,7 @@ class EntryEngine:
                 atr_1h_pct = (atr_1h / price * 100) if atr_1h > 0 and price > 0 else 0
         except Exception:
             pass
-        return max(atr_1h_pct * 0.75, 0.6)
+        return max(atr_1h_pct * 1.0, CFG.entry["sl_offset_pct"])
 
     # ─── Hilfsfunktion: dynamische EMA-Max-Distanz ──────────────
 
