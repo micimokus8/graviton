@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import SESSIONS, DRY_RUN
+from config import SESSIONS, DRY_RUN, EXIT
 from entry import EntryEngine, EntryState
 from exit import ExitEngine, ExitReason
 from sr_levels import check_sr_for_entry
@@ -268,7 +268,11 @@ def _resolve_dry_run_candle(
     if not half_closed and target_hit:
         return "profit_lock", _profit_lock_price(bias, target_price, candle_open)
     if half_closed and stop_hit:
-        return "breakeven_stop", _stop_fill_price(bias, active_stop, candle_open)
+        # Label: Break-Even-Level (entry ± 0.1%) vs. getrailter Stop
+        be_level = entry_price * 1.001 if bias == "LONG" else entry_price * 0.999
+        trailed = abs(active_stop - be_level) / be_level > 0.0005
+        return ("trailing_stop" if trailed else "breakeven_stop",
+                _stop_fill_price(bias, active_stop, candle_open))
     return None
 
 
@@ -634,7 +638,7 @@ def _run_session(session_key: str):
 
     if DRY_RUN:
         # DRY RUN: simulierter 2-Stufen-Exit (Profit Lock bei +1%, dann Break-Even)
-        print(f"   DRY RUN: 2-Stufen-Exit simuliert — 50% bei +1%, Rest Break-Even")
+        print(f"   DRY RUN: 2-Stufen-Exit simuliert — 50% bei +1%, Rest Break-Even + Trailing {EXIT['trailing_pct']}%")
         print(f"   Nächste Session: ~{close_dt.strftime('%H:%M')} UTC (Session-Ende)")
         last_pnl_msg = 0
         best_pnl = 0.0
@@ -679,6 +683,21 @@ def _run_session(session_key: str):
                             candle_high=candle_high,
                             candle_low=candle_low,
                         )
+                        # Trailing für Rest-Hälfte ab Profit-Lock (der Live-Zweig
+                        # macht das längst — die Sim hat es nie nachgebaut). Stop
+                        # läuft dem Hoch (LONG) bzw. Tief (SHORT) je geschlossener
+                        # Kerze hinterher; konservativ: Ratchet erst NACH der
+                        # Stop-Prüfung derselben Kerze.
+                        if half_closed and not event:
+                            trail = EXIT["trailing_pct"] / 100
+                            if bias == "LONG":
+                                cand = candle_high * (1 - trail)
+                                if cand > remaining_stop:
+                                    remaining_stop = cand
+                            else:
+                                cand = candle_low * (1 + trail)
+                                if cand < remaining_stop:
+                                    remaining_stop = cand
                     else:
                         event = None
 
@@ -698,7 +717,7 @@ def _run_session(session_key: str):
                             f"   Entry:  ${entry_price:.8f}\n"
                             f"   Exit:   ${fill_price:.8f}\n"
                             f"   PnL:    🟢 {lock_pnl:+.2f}%\n"
-                            f"   Info:   50% gesichert, Rest → SL auf Break-Even"
+                            f"   Info:   50% gesichert, Rest → Break-Even + Trailing {EXIT['trailing_pct']}%"
                         )
                         print(lock_msg); tg(lock_msg)
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,

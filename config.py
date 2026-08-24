@@ -41,7 +41,7 @@ def _env_float(key: str, default: float = 0.0) -> float:
 DRY_RUN = True  # True = kein Live-Trading, nur Logs
 
 SESSIONS = {
-    "ny":   {"scan": "13:00", "open": "13:30", "close": "16:00"},
+    "ny":   {"scan": "12:00", "open": "12:30", "close": "16:00"},
     "asia": {"scan": "23:30", "open": "00:00", "close": "02:00"},
 }
 
@@ -103,7 +103,7 @@ _position_size_usd = EQUITY_USD * (POSITION["account_risk_pct_per_coin"] / 100)
 
 EXIT = {
     "ema_overextended_pct":  2.50,    # Preis > 2.5% von EMA → struktureller Exit
-    "trailing_pct":          0.30,    # Trailing Stop Abstand
+    "trailing_pct":          0.50,    # Trailing Stop Abstand (Rest-Hälfte ab Profit-Lock)
     "pattern_exit_50":       True,    # 50% raus bei Pattern
     "rsi_extreme_long":      78,
     "rsi_extreme_short":     22,
