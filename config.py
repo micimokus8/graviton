@@ -74,7 +74,8 @@ ENTRY = {
     "ema_period":         20,
     "ema_smoothing":      9,
     "ema_distance_max":   0.50,    # Basis-Distanz; wird dynamisch via 24h-Change skaliert
-    "sl_offset_pct":      0.90,    # Mindest-SL; effektiver SL = max(1.0× 1H-ATR, 0.9%)
+    "sl_offset_pct":      0.90,    # Mindest-SL; effektiver SL = min(max(1.0× 1H-ATR, 0.9%), Cap)
+    "sl_cap_pct":         3.00,     # Maximal-SL; deckelt ATR-Spikes (ACE: -31.8%, GPS: -6.0%)
     "max_stair_steps":    1,       # Start: nur erster Pullback
     "max_parallel_coins": 1,
 }

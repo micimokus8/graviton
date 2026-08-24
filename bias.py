@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import numpy as np
 import ccxt
+import time
 
 from candle_utils import closed_ohlcv
 from volume_metrics import _session_volume_ratio
@@ -76,13 +77,19 @@ class BiasAnalyzer:
         return self._exchange
 
     def _fetch_ohlcv(self, symbol: str, timeframe: str = "15m", limit: int = 40):
-        """Fetch OHLCV with minimal error handling."""
+        """Fetch OHLCV; 1 Retry bei leerem Resultat (Rate-Limit-Blips nach Scan-Burst)."""
         ex = self._get_exchange()
-        try:
-            raw = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
-            return closed_ohlcv(raw, timeframe)
-        except Exception:
-            return np.array([])
+        for attempt in range(2):
+            try:
+                raw = ex.fetch_ohlcv(symbol, timeframe, limit=limit)
+                data = closed_ohlcv(raw, timeframe)
+                if len(data) > 0 or attempt == 1:
+                    return data
+            except Exception:
+                if attempt == 1:
+                    return np.array([])
+            time.sleep(2)  # kurz warten, dann erneut versuchen
+        return np.array([])
 
     @staticmethod
     def _ema(closes: np.ndarray, period: int) -> np.ndarray:

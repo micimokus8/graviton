@@ -85,10 +85,14 @@ class EntryEngine:
             })
         return self._exchange
 
-    def _fetch_1m(self, symbol: str, limit: int = 50, tf: str = "1m") -> np.ndarray:
-        """Fetch OHLCV. Default 1m, alternativ 5m."""
+    def _fetch_1m(self, symbol: str, limit: int = 50, tf: str = "1m") -> Optional[np.ndarray]:
+        """Fetch OHLCV. Default 1m, alternativ 5m. None bei API-Fehler."""
         ex = self._get_exchange()
-        candles = ex.fetch_ohlcv(symbol, timeframe=tf, limit=limit)
+        try:
+            candles = ex.fetch_ohlcv(symbol, timeframe=tf, limit=limit)
+        except Exception as e:
+            print(f"   [entry] OHLCV-Fetch-Fehler {symbol} {tf}: {e}")
+            return None
         return closed_ohlcv(candles, tf)
 
     def _calc_ema(self, closes: np.ndarray, period: int = 20) -> np.ndarray:
@@ -219,7 +223,10 @@ class EntryEngine:
                 atr_1h_pct = (atr_1h / price * 100) if atr_1h > 0 and price > 0 else 0
         except Exception:
             pass
-        return max(atr_1h_pct * 1.0, CFG.entry["sl_offset_pct"])
+        # Cap: ATR-Spikes (neue Listings, Vol-Explosionen) dürfen den SL nicht
+        # auf absurde Distanzen treiben — ACE 15.08. hatte -31.8%, GPS -6.0%.
+        cap = CFG.entry.get("sl_cap_pct", 3.0)
+        return min(max(atr_1h_pct * 1.0, CFG.entry["sl_offset_pct"]), cap)
 
     # ─── Hilfsfunktion: dynamische EMA-Max-Distanz ──────────────
 
@@ -280,8 +287,18 @@ class EntryEngine:
                 step=current_step, timestamp="",
             )
 
-        # Fetch 5m Daten
+        # Fetch 5m Daten — Guard: leere/dünne Daten = kein Entry (fail-closed).
+        # Vorher: IndexError "index 0 is out of bounds" im 30s-Polling (POL 24.08.,
+        # Kraken lieferte 0×5m-Kerzen) → Session ohne Entry beendet.
         data = self._fetch_1m(symbol, limit=60, tf="5m")
+        if data is None or len(data) < ema_period + 1:
+            return EntrySignal(
+                symbol=symbol, bias=bias, state=EntryState.NO_ENTRY,
+                price=0, ema20=0, distance_pct=999,
+                rejection=False, rejection_high=0, rejection_low=0,
+                rejection_close=0, entry_price=0, stop_loss=0,
+                step=current_step, timestamp=datetime.now(timezone.utc).isoformat(),
+            )
         closes  = data[:, 4]
         highs   = data[:, 2]
         lows    = data[:, 3]
