@@ -33,6 +33,7 @@ import time
 
 from candle_utils import closed_ohlcv
 from volume_metrics import _session_volume_ratio
+from feature_snapshot import build_timeframe_features, relative_strength
 
 
 # ─── BiasResult ──────────────────────────────────────────────────────
@@ -50,6 +51,7 @@ class BiasResult:
     red_candles: int = 0
     signal_count: int = 0  # 3 = 3/3, 2 = 2/3, 0 = NOISE
     reason: str = ""
+    features: dict = field(default_factory=dict)
 
 
 # ─── BiasAnalyzer ────────────────────────────────────────────────────
@@ -222,6 +224,37 @@ class BiasAnalyzer:
 
         return False, f"Trend {aligned}c, kein Erschöpfungsmuster"
 
+    def _build_feature_snapshot(self, result: BiasResult) -> BiasResult:
+        """Attach analysis data without changing the deterministic bias."""
+        error_features = build_timeframe_features(np.empty((0, 6)))
+        snapshot = {
+            "status": "OK",
+            "timeframes": {tf: dict(error_features) for tf in ("15m", "30m", "1h")},
+            "btc": {tf: dict(error_features) for tf in ("30m", "1h")},
+            "relative_strength_30m_pct": None,
+            "relative_strength_1h_pct": None,
+        }
+        try:
+            coin_data = {}
+            for timeframe in ("15m", "30m", "1h"):
+                coin_data[timeframe] = self._fetch_ohlcv(result.symbol, timeframe, limit=60)
+                snapshot["timeframes"][timeframe] = build_timeframe_features(coin_data[timeframe])
+            btc_data = {}
+            for timeframe in ("30m", "1h"):
+                btc_data[timeframe] = self._fetch_ohlcv("BTC/USD:USD", timeframe, limit=60)
+                snapshot["btc"][timeframe] = build_timeframe_features(btc_data[timeframe])
+            for timeframe, key in (("30m", "relative_strength_30m_pct"), ("1h", "relative_strength_1h_pct")):
+                coin, btc = coin_data[timeframe], btc_data[timeframe]
+                if len(coin) and len(btc):
+                    snapshot[key] = relative_strength(
+                        float(coin[-1, 4]), float(btc[-1, 4]),
+                        float(coin[0, 4]), float(btc[0, 4]))
+        except Exception as exc:
+            snapshot["status"] = "ERROR"
+            snapshot["error"] = type(exc).__name__
+        result.features = snapshot
+        return result
+
     # ────────────────────────────────────────────────────────────────
 
     def analyze(self, symbol: str, session_open_ts: int) -> BiasResult:
@@ -378,6 +411,7 @@ class BiasAnalyzer:
 def analyze_watchlist(
     symbols: List[str],
     session_open_ts: int,
+    include_features: bool = False,
 ) -> List[BiasResult]:
     """Analysiert Bias für eine Liste von Coins (ohne Print — Cron macht Output)."""
     analyzer = BiasAnalyzer()
@@ -385,6 +419,8 @@ def analyze_watchlist(
     for sym in symbols:
         try:
             result = analyzer.analyze(sym, session_open_ts)
+            if include_features:
+                result = analyzer._build_feature_snapshot(result)
             results.append(result)
         except Exception as e:
             print(f"  {sym}: ERROR — {e}")

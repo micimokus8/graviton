@@ -38,10 +38,10 @@ class DryRunMathTests(unittest.TestCase):
             active_stop=99.0,
             half_closed=False,
             candle_open=100.0,
-            candle_high=101.5,
+            candle_high=101.6,
             candle_low=99.8,
         )
-        self.assertEqual(event, ("profit_lock", 101.0))
+        self.assertEqual(event, ("profit_lock", 101.05))
 
     def test_stop_wins_when_initial_stop_and_profit_target_are_both_crossed(self):
         event = _resolve_dry_run_candle(
@@ -91,9 +91,9 @@ class DryRunMathTests(unittest.TestCase):
             half_closed=False,
             candle_open=100.0,
             candle_high=100.2,
-            candle_low=98.5,
+            candle_low=98.4,
         )
-        self.assertEqual(event, ("profit_lock", 99.0))
+        self.assertEqual(event, ("profit_lock", 98.95))
 
     def test_short_stop_wins_when_stop_and_target_are_both_crossed(self):
         event = _resolve_dry_run_candle(

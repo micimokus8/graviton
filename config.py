@@ -59,6 +59,12 @@ SCAN = {
 
 # ─── Bias ──────────────────────────────────────────────────────────
 
+LLM_BIAS_ENABLED = _env("LLM_BIAS_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+LLM_BIAS_API_KEY = _env("LLM_BIAS_API_KEY", "")
+LLM_BIAS_BASE_URL = _env("LLM_BIAS_BASE_URL", "https://openrouter.ai/api/v1")
+LLM_BIAS_MODEL = _env("LLM_BIAS_MODEL", "")
+LLM_BIAS_MIN_CONFIDENCE = _env_float("LLM_BIAS_MIN_CONFIDENCE", 0.65)
+
 BIAS = {
     "timeframe":              "15m",
     "min_candles":           4,           # 4 Kerzen = 1h Daten (v2)
@@ -103,7 +109,8 @@ _position_size_usd = EQUITY_USD * (POSITION["account_risk_pct_per_coin"] / 100)
 
 EXIT = {
     "ema_overextended_pct":  2.50,    # Preis > 2.5% von EMA → struktureller Exit
-    "trailing_pct":          0.50,    # Trailing Stop Abstand (Rest-Hälfte ab Profit-Lock)
+    "trailing_pct":          0.50,    # Trailing Stop Abstand für die Rest-Hälfte
+    "profit_lock_pct":        1.05,    # 50% sichern, danach Rest trailing
     "pattern_exit_50":       True,    # 50% raus bei Pattern
     "rsi_extreme_long":      78,
     "rsi_extreme_short":     22,

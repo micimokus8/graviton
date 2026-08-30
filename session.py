@@ -25,6 +25,7 @@ from sr_levels import check_sr_for_entry
 from telegram_sender import send as tg
 from candle_utils import closed_ohlcv
 from atomic_json import atomic_write_json
+from candidate_ranking import deterministic_rank
 
 DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -256,11 +257,11 @@ def _resolve_dry_run_candle(
     """
     if bias == "LONG":
         stop_hit = candle_low <= active_stop
-        target_price = entry_price * 1.01
+        target_price = entry_price * (1 + EXIT["profit_lock_pct"] / 100)
         target_hit = candle_high >= target_price
     else:
         stop_hit = candle_high >= active_stop
-        target_price = entry_price * 0.99
+        target_price = entry_price * (1 - EXIT["profit_lock_pct"] / 100)
         target_hit = candle_low <= target_price
 
     if not half_closed and stop_hit:
@@ -468,6 +469,14 @@ def _run_session(session_key: str):
         msg = f"⚠️ [{name}] Alle Kandidaten S/R-geblockt — Session beendet."
         print(msg); tg(msg)
         return
+
+    # Transparente Bias-Rangfolge. Die laufende Entry-Prüfung bleibt dynamisch:
+    # bei gleichzeitig gültigen Signalen entscheidet weiterhin die EMA-Distanz.
+    active_candidates = deterministic_rank(active_candidates)
+    print("   Deterministisches Bias-Ranking: " + " > ".join(
+        f"{_base(c)} ({c['rank_score']:.2f}; {', '.join(c['rank_reasons'])})"
+        for c in active_candidates
+    ))
 
     bases = [_base(c) for c in active_candidates]
     print(f"👁 [{name}] Entry-Polling — {len(active_candidates)} Kandidaten: {', '.join(bases)}")
@@ -704,10 +713,13 @@ def _run_session(session_key: str):
                     if event and event[0] == "profit_lock":
                         _, fill_price = event
                         half_closed = True
+                        # Profit-Lock-Rest: kein Break-Even. Der Trailing-Stop
+                        # startet direkt 0.5% hinter dem tatsächlichen Lock-Fill.
+                        trail = EXIT["trailing_pct"] / 100
                         remaining_stop = (
-                            entry_price * (1 + 0.001)
+                            fill_price * (1 - trail)
                             if bias == "LONG"
-                            else entry_price * (1 - 0.001)
+                            else fill_price * (1 + trail)
                         )
                         lock_pnl = _pnl_pct(entry_price, fill_price, bias)
                         total_pnl += lock_pnl * 0.5
@@ -717,7 +729,7 @@ def _run_session(session_key: str):
                             f"   Entry:  ${entry_price:.8f}\n"
                             f"   Exit:   ${fill_price:.8f}\n"
                             f"   PnL:    🟢 {lock_pnl:+.2f}%\n"
-                            f"   Info:   50% gesichert, Rest → Break-Even + Trailing {EXIT['trailing_pct']}%"
+                            f"   Info:   50% gesichert, Rest → Trailing ab Lock-Preis ({EXIT['trailing_pct']}%)"
                         )
                         print(lock_msg); tg(lock_msg)
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,
@@ -738,7 +750,7 @@ def _run_session(session_key: str):
                             f"   Exit:   ${fill_price:.8f}\n"
                             f"   PnL:    {pnl_icon} {rest_pnl:+.2f}% (Rest-Anteil)\n"
                             f"   Gesamt-PnL Trade: {total_pnl:+.2f}%\n"
-                            f"   Info:   DRY RUN {'Break-Even-Stop' if half_closed else 'SL'} getriggert"
+                            f"   Info:   DRY RUN {('Trailing-Stop' if half_closed else 'SL')} getriggert"
                         )
                         print(sl_msg); tg(sl_msg)
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,
@@ -819,18 +831,29 @@ def _run_session(session_key: str):
 
                     if sig.reason in (ExitReason.PATTERN, ExitReason.PROFIT_LOCK):
                         level = "1/3"
+                        if sig.reason == ExitReason.PATTERN:
+                            remaining_stop = entry_price
+                            trailing_start = "Break-Even"
+                        else:
+                            trail = EXIT["trailing_pct"] / 100
+                            remaining_stop = (
+                                sig.price * (1 - trail)
+                                if bias == "LONG"
+                                else sig.price * (1 + trail)
+                            )
+                            trailing_start = f"Lock-Preis mit Trailing {EXIT['trailing_pct']}%"
                         exit_msg = (
                             f"📤 {mode} EXIT {pct}% {bias} {base}\n"
                             f"   Level:  {level} — {sig.reason.value}\n"
                             f"   Preis:  {sig.price:.6f}\n"
                             f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
                             f"   Info:   {sig.message}\n"
-                            f"   → Rest läuft mit SL auf Break-Even + Trailing"
+                            f"   → Rest läuft mit SL: {trailing_start}"
                         )
                         print(exit_msg); tg(exit_msg)
-                        tracked.stop_loss = entry_price
+                        tracked.stop_loss = remaining_stop
                         tracked.trailing_active = True
-                        tracked.trailing_price = entry_price
+                        tracked.trailing_price = remaining_stop
                         tracked.pattern_exit_done = True
                         current_step = 2
                         watcher.add_position(tracked)
@@ -845,7 +868,7 @@ def _run_session(session_key: str):
                             entered = False
                             watcher.remove_position(symbol)
                             break
-                        print(f"  → 50% geschlossen + SL auf Break-Even + Trailing aktiv: {entry_price:.6f}")
+                        print(f"  → 50% geschlossen + {trailing_start} aktiv: {remaining_stop:.6f}")
 
                     elif sig.reason in (ExitReason.EMA_OVEREXTENDED, ExitReason.SR_REACHED,
                                          ExitReason.RSI_EXTREME, ExitReason.STOP_LOSS):
