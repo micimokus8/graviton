@@ -17,8 +17,10 @@ _SYSTEM = (
     "gelieferten technischen Kennzahlen. Erfinde keine Werte. Berücksichtige "
     "Trend, Momentum, RSI, MACD, Stochastic, Support/Resistance, Überdehnung, "
     "Pullback und BTC-Kontext. Wenn Signale widersprüchlich, zu spät oder noisy "
-    "sind, antworte NOISE. Gib ausschließlich valides JSON zurück: "
-    '{"decision":"LONG|SHORT|NOISE","confidence":0.0,"reason":"kurz"}'
+    "sind, antworte NOISE. Setze confidence auf 0.5-0.95 je nach Klarheit. "
+    "Gib ausschließlich valides JSON zurück: "
+    '{"decision":"LONG|SHORT|NOISE","confidence":0.8,'
+    '"reason":"1-2 Sätze Begründung"}'
 )
 
 

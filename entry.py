@@ -245,9 +245,9 @@ class EntryEngine:
             ticker = ex.fetch_ticker(symbol)
             change_24h = abs(float(ticker.get("percentage", 0) or 0))
             if change_24h >= 10:
-                return max(base_dist, 1.00)
+                return max(base_dist, 1.50)
             elif change_24h >= 5:
-                return max(base_dist, 0.60)
+                return max(base_dist, 0.80)
         except Exception:
             pass
         return base_dist

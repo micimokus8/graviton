@@ -72,10 +72,20 @@ def decide_ranking(
     result = {"ranking": [], "confidence": 0.0, "reason": "LLM nicht verfügbar", "fallback": True}
     if not api_key or not model or not symbols:
         return result
+    _RANKING_SYSTEM = (
+        "Du bist ein Krypto-Trading-Analyst. Du erhältst Kandidaten mit technischen "
+        "Indikatoren (EMA20/50, RSI, MACD, Stochastic, ATR, Volatilität) auf 15m/30m/1h "
+        "sowie BTC-Kontext und Relative-Stärke-Werten. Ordne die Kandidaten nach "
+        "Trendstärke und Momentum-Qualität: stärkster, klarster Trend zuerst. "
+        "Berücksichtige EMA-Ausrichtung über Timeframes, MACD-Histogramm-Vorzeichen, "
+        "RSI-Niveau (nicht überkauft/überverkauft) und Relative Strength vs BTC. "
+        "Setze confidence auf 0.5-0.95 je nach Klarheit der Trennung. "
+        "Antworte ausschließlich als JSON: "
+        '{"ranking":["SYM1/USD:USD","SYM2/USD:USD"],'
+        '"confidence":0.8,"reason":"1-2 Sätze"}'
+    )
     payload = {"model": model, "temperature": 0.0, "max_tokens": 240,
-               "messages": [{"role": "system", "content":
-                   'Ordne nur die gelieferten Kandidaten. Antworte ausschließlich JSON: '
-                   '{"ranking":["SYMBOL"],"confidence":0.0,"reason":"kurz"}'},
+               "messages": [{"role": "system", "content": _RANKING_SYSTEM},
                  {"role": "user", "content": json.dumps(candidates, ensure_ascii=False, separators=(",", ":"))}]}
     if requester is None:
         def requester(url: str, *, headers: dict, timeout: float, payload: dict):
