@@ -38,7 +38,7 @@ def _env_float(key: str, default: float = 0.0) -> float:
 
 # ─── Mode ──────────────────────────────────────────────────────────
 
-DRY_RUN = True  # True = kein Live-Trading, nur Logs
+DRY_RUN = False  # False = LIVE-Trading (am 27.09.2026 freigeschaltet, halbe Größe 8.75%)
 
 SESSIONS = {
     "ny":   {"scan": "12:00", "open": "12:30", "close": "16:00"},
@@ -98,7 +98,7 @@ SR = {
 EQUITY_USD = _env_float("EQUITY_USD", 200.0)
 
 POSITION = {
-    "account_risk_pct_per_coin":  17.5,   # % der Equity pro Coin
+    "account_risk_pct_per_coin":  8.75,   # ~$50 Position bei ~$570 Equity (halbiert für Live-Start)
     "max_total_exposure_pct":     17.5,   # = 1 Position
 }
 

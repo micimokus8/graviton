@@ -140,7 +140,7 @@ class ExitEngine:
         # ─── Stufe 2: Pattern (50%) ────────────────────────────
 
         pattern = detect_exit_pattern(opens, highs, lows, closes, side.upper())
-        if pattern and cfg_exit["pattern_exit_50"]:
+        if pattern and cfg_exit["pattern_exit_50"] and not trailing_active:
             pname = self._which_pattern(opens, highs, lows, closes, side.upper())
             return sig(symbol, side, ExitReason.PATTERN, 0.5, price, ema20, round(dist, 2),
                       round(rsi_val, 1), True, True,
