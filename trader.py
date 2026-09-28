@@ -319,10 +319,11 @@ class KrakenTrader:
                 print(f"[Trader] SL-Fehler bei {symbol}: {exc}")
                 return False
 
-            try:
-                ex.cancel_order(old_stop_id, symbol)
-            except Exception as exc:
-                print(f"[Trader] Alten SL nicht abgebrochen, neuer aktiv: {exc}")
+            if old_stop_id:
+                try:
+                    ex.cancel_order(old_stop_id, symbol)
+                except Exception as exc:
+                    print(f"[Trader] Alten SL nicht abgebrochen, neuer aktiv: {exc}")
             print(f"[Trader] SL gesetzt: {symbol} {amount} @ {sl_rounded} | ID: {order.get('id')}")
             return True
 

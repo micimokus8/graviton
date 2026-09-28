@@ -137,10 +137,16 @@ class ExitEngine:
                       round(dist, 2), round(rsi_val, 1),
                       msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
 
-        # ─── Stufe 2: Pattern (50%) ────────────────────────────
+        # PnL wird vor dem Pattern-Check gebraucht (Pattern nur bei Profit).
+        pnl_pct = ((price - entry_price) / entry_price * 100) if side == "long" \
+                  else ((entry_price - price) / entry_price * 100)
 
+        # ─── Stufe 2: Pattern (50%) ────────────────────────────
+        # Nur bei Profit (>0): ein Bearish-Engulfing direkt nach dem
+        # Pullback-Entry ist Teil des Pullbacks selbst, kein Umkehr-Signal.
+        # Im Minus ist ausschließlich der Stop-Loss zuständig.
         pattern = detect_exit_pattern(opens, highs, lows, closes, side.upper())
-        if pattern and cfg_exit["pattern_exit_50"] and not trailing_active:
+        if pattern and cfg_exit["pattern_exit_50"] and not trailing_active and pnl_pct > 0:
             pname = self._which_pattern(opens, highs, lows, closes, side.upper())
             return sig(symbol, side, ExitReason.PATTERN, 0.5, price, ema20, round(dist, 2),
                       round(rsi_val, 1), True, True,
@@ -149,8 +155,6 @@ class ExitEngine:
         # ─── Stufe 3: Strukturell (100%) ───────────────────────
 
         # B0.5: Soft Profit Lock — +1.05% ohne Pattern → 50% sichern + Trailing
-        pnl_pct = ((price - entry_price) / entry_price * 100) if side == "long" \
-                  else ((entry_price - price) / entry_price * 100)
         if pnl_pct >= cfg_exit["profit_lock_pct"] and not trailing_active:
             return sig(symbol, side, ExitReason.PROFIT_LOCK, 0.5, price, ema20,
                       round(dist, 2), round(rsi_val, 1), False, True,
