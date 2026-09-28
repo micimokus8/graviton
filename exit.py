@@ -160,40 +160,44 @@ class ExitEngine:
                       round(dist, 2), round(rsi_val, 1), False, True,
                       f"[PROFIT LOCK] +{pnl_pct:.1f}% ohne Pattern → 50% + Trailing")
 
-        # B1: EMA overextended
-        if dist > cfg_exit["ema_overextended_pct"]:
-            return sig(symbol, side, ExitReason.EMA_OVEREXTENDED, 1.0, price, ema20,
-                      round(dist, 2), round(rsi_val, 1),
-                      msg=f"[STRUKTURELL] EMA {dist:.1f}% entfernt → 100%")
+        # Strukturelle Exits (EMA/RSI/S/R) — deaktiviert via structural_exits.
+        # Live läuft wie der DRY-RUN-Backtest: nur SL + Profit-Lock + Trailing.
+        if cfg_exit.get("structural_exits", False):
 
-        # B2: RSI extrem (ab Step 2, nicht 4 — max_stair_steps=1 würde 4 nie erreichen)
-        if current_step >= 2:
-            if side == "long" and rsi_val > cfg_exit["rsi_extreme_long"]:
-                return sig(symbol, side, ExitReason.RSI_EXTREME, 1.0, price, ema20,
+            # B1: EMA overextended
+            if dist > cfg_exit["ema_overextended_pct"]:
+                return sig(symbol, side, ExitReason.EMA_OVEREXTENDED, 1.0, price, ema20,
                           round(dist, 2), round(rsi_val, 1),
-                          msg=f"[STRUKTURELL] RSI {rsi_val:.0f} extrem → 100%")
-            elif side == "short" and rsi_val < cfg_exit["rsi_extreme_short"]:
-                return sig(symbol, side, ExitReason.RSI_EXTREME, 1.0, price, ema20,
-                          round(dist, 2), round(rsi_val, 1),
-                          msg=f"[STRUKTURELL] RSI {rsi_val:.0f} extrem → 100%")
+                          msg=f"[STRUKTURELL] EMA {dist:.1f}% entfernt → 100%")
 
-        # B3: S/R erreicht
-        try:
-            sr = self._sr_calc.calculate(symbol)
-            if side == "long":
-                res = sr.nearest_resistance(price)
-                if res and price >= res * 0.998:
-                    return sig(symbol, side, ExitReason.SR_REACHED, 1.0, price, ema20,
+            # B2: RSI extrem (ab Step 2, nicht 4 — max_stair_steps=1 würde 4 nie erreichen)
+            if current_step >= 2:
+                if side == "long" and rsi_val > cfg_exit["rsi_extreme_long"]:
+                    return sig(symbol, side, ExitReason.RSI_EXTREME, 1.0, price, ema20,
                               round(dist, 2), round(rsi_val, 1),
-                              msg=f"[STRUKTURELL] Resistance {res:.4f} erreicht → 100%")
-            else:
-                sup = sr.nearest_support(price)
-                if sup and price <= sup * 1.002:
-                    return sig(symbol, side, ExitReason.SR_REACHED, 1.0, price, ema20,
+                              msg=f"[STRUKTURELL] RSI {rsi_val:.0f} extrem → 100%")
+                elif side == "short" and rsi_val < cfg_exit["rsi_extreme_short"]:
+                    return sig(symbol, side, ExitReason.RSI_EXTREME, 1.0, price, ema20,
                               round(dist, 2), round(rsi_val, 1),
-                              msg=f"[STRUKTURELL] Support {sup:.4f} erreicht → 100%")
-        except Exception:
-            pass
+                              msg=f"[STRUKTURELL] RSI {rsi_val:.0f} extrem → 100%")
+
+            # B3: S/R erreicht
+            try:
+                sr = self._sr_calc.calculate(symbol)
+                if side == "long":
+                    res = sr.nearest_resistance(price)
+                    if res and price >= res * 0.998:
+                        return sig(symbol, side, ExitReason.SR_REACHED, 1.0, price, ema20,
+                                  round(dist, 2), round(rsi_val, 1),
+                                  msg=f"[STRUKTURELL] Resistance {res:.4f} erreicht → 100%")
+                else:
+                    sup = sr.nearest_support(price)
+                    if sup and price <= sup * 1.002:
+                        return sig(symbol, side, ExitReason.SR_REACHED, 1.0, price, ema20,
+                                  round(dist, 2), round(rsi_val, 1),
+                                  msg=f"[STRUKTURELL] Support {sup:.4f} erreicht → 100%")
+            except Exception:
+                pass
 
         # Kein Exit — price muss aktuellen Preis enthalten!
         return sig(symbol, side, ExitReason.NONE, 0, price, ema20,

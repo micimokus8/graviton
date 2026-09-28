@@ -108,10 +108,11 @@ _position_size_usd = EQUITY_USD * (POSITION["account_risk_pct_per_coin"] / 100)
 # ─── Exit ──────────────────────────────────────────────────────────
 
 EXIT = {
-    "ema_overextended_pct":  2.50,    # Preis > 2.5% von EMA → struktureller Exit
+    "ema_overextended_pct":  2.50,    # Preis > 2.5% von EMA → struktureller Exit (inaktiv, siehe structural_exits)
     "trailing_pct":          0.50,    # Trailing Stop Abstand für die Rest-Hälfte
     "profit_lock_pct":        1.05,    # 50% sichern, danach Rest trailing
-    "pattern_exit_50":       True,    # 50% raus bei Pattern
+    "pattern_exit_50":       False,   # Pattern aus — Live = DRY RUN (1m-Umkehr vs 5m-Pullback-Konflikt)
+    "structural_exits":      False,   # EMA/RSI/S/R aus — Live = DRY RUN (nur SL + Profit-Lock + Trailing)
     "rsi_extreme_long":      78,
     "rsi_extreme_short":     22,
 }
