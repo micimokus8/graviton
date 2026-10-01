@@ -131,11 +131,11 @@ class ExitEngine:
         if side == "long" and price <= stop_loss:
             return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
                       round(dist, 2), round(rsi_val, 1),
-                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
+                      msg=f"[STOP-LOSS] {stop_loss:.8g} getriggert → 100%")
         elif side == "short" and price >= stop_loss:
             return sig(symbol, side, ExitReason.STOP_LOSS, 1.0, price, ema20,
                       round(dist, 2), round(rsi_val, 1),
-                      msg=f"[STOP-LOSS] {stop_loss:.4f} getriggert → 100%")
+                      msg=f"[STOP-LOSS] {stop_loss:.8g} getriggert → 100%")
 
         # PnL wird vor dem Pattern-Check gebraucht (Pattern nur bei Profit).
         pnl_pct = ((price - entry_price) / entry_price * 100) if side == "long" \

@@ -883,7 +883,7 @@ def _run_session(session_key: str):
                         print(exit_msg); tg(exit_msg)
                         if trader is not None:
                             result = trader.close_position(symbol, bias.lower())
-                            if not result.success:
+                            if not result.success and "Keine Position" not in str(result.message):
                                 err_msg = f"🚨 [{name}] {base}: {sig.reason.value} - Close fehlgeschlagen — {result.message}"
                                 print(err_msg); tg(err_msg)
                         entered = False
@@ -909,7 +909,7 @@ def _run_session(session_key: str):
                             print(trail_msg); tg(trail_msg)
                             if trader is not None:
                                 result = trader.close_position(symbol, bias.lower())
-                                if not result.success:
+                                if not result.success and "Keine Position" not in str(result.message):
                                     err_msg = f"🚨 [{name}] {base}: Trailing-Close fehlgeschlagen — {result.message}"
                                     print(err_msg); tg(err_msg)
                             entered = False
