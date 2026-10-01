@@ -94,12 +94,14 @@ class KrakenTrader:
             balance = ex.fetch_balance({"type": "flex"})
             total_dict = balance.get("total", {})
             usd = float(total_dict.get("USD", 0) or 0)
+            eur = float(total_dict.get("EUR", 0) or 0)
+            # Multi-Collateral: USD und EUR können gleichzeitig im Wallet liegen
+            # (z.B. USD-Reste aus Futures-PnL/Gebühren). Summiere beide, statt
+            # fälschlich nur USD zu nehmen, sobald ein kleiner USD-Rest > 0 ist.
+            if eur > 0:
+                usd += eur * self._fetch_eur_usd_rate()
             if usd > 0:
                 self._equity = usd
-                return self._equity
-            eur = float(total_dict.get("EUR", 0) or 0)
-            if eur > 0:
-                self._equity = eur * self._fetch_eur_usd_rate()
                 return self._equity
             self._equity = float(os.getenv("EQUITY_USD", "200"))
             return self._equity
