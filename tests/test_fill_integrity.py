@@ -127,10 +127,42 @@ def test_account_str_zeigt_eur_usd():
     print(f"  OK: Konto-String = {s}")
 
 
+def test_partial_exit_liefert_echten_50pct_fill():
+    """Profit-Lock (50%) muss den 50%-Fill liefern, NICHT den letzten Fill
+    (der könnte der SL-Close der anderen Hälfte sein)."""
+    class SeqTrader(MockTrader):
+        def __init__(self):
+            super().__init__()
+            self._close_prices = iter([1187.47])  # 1. close = 50%-Fill
+            self._stop_ok = True
+        def set_stop_loss(self, symbol, side, stop_price, amount=None):
+            return self._stop_ok
+        def close_position(self, symbol, side, close_pct=1.0, **kw):
+            from trader import TradeResult
+            try:
+                p = next(self._close_prices)
+            except StopIteration:
+                p = self._close_price
+            return TradeResult(True, symbol, side, "f", p, 0, 0, "Closed 50%", "t")
+
+    t = SeqTrader()
+    status, error, partial_fill = session._execute_live_partial_exit(
+        t, "ZEC/USD:USD", "SHORT", 1189.04
+    )
+    assert status == "protected", f"status={status}"
+    assert partial_fill == 1187.47, f"partial_fill={partial_fill} (erwartet 1187.47, NICHT letzter Fill 1190.17)"
+    assert error == "", f"error={error}"
+    # PnL des 50%-Closes aus dem echten Fill
+    pnl = session._live_fill_pnl(1205.1, partial_fill, "SHORT")
+    assert abs(pnl - 1.46) < 0.05, f"PnL={pnl:.2f} (erwartet ~+1.46)"
+    print(f"  OK: Partial-Exit liefert echten 50%-Fill 1187.47 → PnL +{pnl:.2f}% (statt 1190.17 / +1.24%)")
+
+
 if __name__ == "__main__":
     for fn in (test_last_live_fill_uses_fill_price,
                test_emit_exit_meldet_konto_stand,
                test_confirm_and_report_keine_position_nutzt_fill,
-               test_account_str_zeigt_eur_usd):
+               test_account_str_zeigt_eur_usd,
+               test_partial_exit_liefert_echten_50pct_fill):
         fn()
     print("\nALLE TESTS OK ✅")

@@ -46,7 +46,7 @@ class LiveEntryExitIntegrationTests(unittest.TestCase):
         trader = _FakeTrader(partial_success=False)
 
         from session import _execute_live_partial_exit
-        status, error = _execute_live_partial_exit(
+        status, error, _fill = _execute_live_partial_exit(
             trader, "X/USD:USD", "LONG", 100.0
         )
 

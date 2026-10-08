@@ -160,20 +160,27 @@ def _execute_live_partial_exit(
     symbol: str,
     bias: str,
     new_stop: float,
-) -> tuple[str, str]:
-    """Reduce first under existing protection, then replace the stop."""
+) -> tuple[str, str, float]:
+    """Reduce first under existing protection, then replace the stop.
+
+    Returns (status, error, partial_fill_price). partial_fill_price ist der
+    echte Fill des 50%-Closes (0.0 wenn keiner bestätigt) — Grundlage für
+    die Exit-Meldung, NICHT der letzte Fill (der könnte schon der SL-Close
+    der anderen Hälfte sein).
+    """
     partial = trader.close_position(symbol, bias.lower(), close_pct=0.5)
     if not partial.success:
-        return "unchanged", f"Partial-Close fehlgeschlagen: {partial.message}"
+        return "unchanged", f"Partial-Close fehlgeschlagen: {partial.message}", 0.0
+    partial_fill = float(partial.price or 0)
     if trader.set_stop_loss(symbol, bias.lower(), new_stop):
-        return "protected", ""
+        return "protected", "", partial_fill
     emergency = trader.close_position(symbol, bias.lower(), close_pct=1.0)
     if emergency.success:
-        return "closed", "Break-Even-SL fehlgeschlagen; Rest per Emergency-Close geschlossen"
+        return "closed", "Break-Even-SL fehlgeschlagen; Rest per Emergency-Close geschlossen", partial_fill
     return "critical", (
         "KRITISCH: Break-Even-SL und Emergency-Close fehlgeschlagen — "
         f"{emergency.message}"
-    )
+    ), partial_fill
 
 
 def _last_live_fill(trader, symbol: str, entry_ts_ms: float) -> dict | None:
@@ -980,9 +987,9 @@ def _run_session(session_key: str):
                             trailing_start = f"Lock-Preis mit Trailing {EXIT['trailing_pct']}%"
 
                         # 50%-Close erst ausführen (unter bestehendem SL-Schutz),
-                        # dann echten Fill holen und mit Fill-Preis melden.
+                        # dann den ECHTEN 50%-Fill verwenden für die Meldung.
                         if trader is not None and not DRY_RUN:
-                            status, error = _execute_live_partial_exit(
+                            status, error, partial_fill = _execute_live_partial_exit(
                                 trader, symbol, bias, remaining_stop
                             )
                             if error:
@@ -992,8 +999,9 @@ def _run_session(session_key: str):
                                 entered = False
                                 watcher.remove_position(symbol)
                                 break
-                            fill = _last_live_fill(trader, symbol, entry_ts_ms)
-                            fill_price = fill["price"] if (fill and fill["price"] > 0) else sig.price
+                            # Der echte Fill des 50%-Closes (nicht der letzte Fill,
+                            # der könnte schon der SL-Close der anderen Hälfte sein).
+                            fill_price = partial_fill if partial_fill > 0 else sig.price
                             _emit_exit(
                                 mode, name,
                                 sig.reason.value, level, pct, sig.message,

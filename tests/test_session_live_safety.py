@@ -28,7 +28,8 @@ class _FakeTrader:
     def close_position(self, symbol, side, close_pct=1.0):
         self.close_calls.append(close_pct)
         success = self.partial_success if close_pct == 0.5 else True
-        return SimpleNamespace(success=success, message="ok" if success else "close failed")
+        return SimpleNamespace(success=success, price=100.0,
+                               message="ok" if success else "close failed")
 
 
 class SessionLiveSafetyTests(unittest.TestCase):
@@ -52,7 +53,7 @@ class SessionLiveSafetyTests(unittest.TestCase):
     def test_partial_exit_failure_keeps_existing_protection(self):
         trader = _FakeTrader(partial_success=False)
 
-        status, error = _execute_live_partial_exit(
+        status, error, _fill = _execute_live_partial_exit(
             trader, "X/USD:USD", "LONG", 100.0
         )
 
@@ -63,7 +64,7 @@ class SessionLiveSafetyTests(unittest.TestCase):
     def test_failed_replacement_stop_closes_remaining_position(self):
         trader = _FakeTrader(sl_success=False)
 
-        status, error = _execute_live_partial_exit(
+        status, error, _fill = _execute_live_partial_exit(
             trader, "X/USD:USD", "LONG", 100.0
         )
 
