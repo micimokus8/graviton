@@ -403,3 +403,50 @@ class KrakenTrader:
             if strict:
                 raise RuntimeError(f"Kraken Positionsabruf fehlgeschlagen: {e}") from e
             return []
+
+    # ─── Echte Positions-/Fill-Abfrage (gegen Fake-Meldungen) ─────
+
+    def get_position_contracts(self, symbol: str, side: str) -> float:
+        """Aktuelle offene Contracts für (symbol, side). 0 = Position geschlossen/weg."""
+        try:
+            positions = self._get_exchange().fetch_positions([symbol])
+            for p in positions:
+                c = float(p.get("contracts", 0) or 0)
+                p_side = (p.get("side", "") or "").lower()
+                if c > 0 and p_side == side:
+                    return c
+            return 0.0
+        except Exception as e:
+            print(f"[Trader] get_position_contracts {symbol}: {e}")
+            return -1.0  # -1 = Abfrage fehlgeschlagen (nicht sicher)
+
+    def get_fills_since(self, symbol: str, since_ms: float) -> list:
+        """Echte Kraken-Fills für symbol seit since_ms (aufsteigend sortiert)."""
+        try:
+            fills = self._get_exchange().fetch_my_trades(symbol, limit=100)
+            return sorted(
+                [f for f in fills if f.get("timestamp", 0) >= since_ms],
+                key=lambda f: f.get("timestamp", 0),
+            )
+        except Exception as e:
+            print(f"[Trader] get_fills_since {symbol}: {e}")
+            return []
+
+    def get_account_state(self) -> dict:
+        """EUR + USD Equity (Multi-Collateral) für Konto-Stand-Anzeige.
+
+        Returns dict mit eur, usd, usd_total (EUR→USD via aktuellem Kurs),
+        oder None wenn Abruf fehlschlägt.
+        """
+        try:
+            ex = self._get_exchange()
+            balance = ex.fetch_balance({"type": "flex"})
+            total = balance.get("total", {})
+            usd = float(total.get("USD", 0) or 0)
+            eur = float(total.get("EUR", 0) or 0)
+            rate = self._fetch_eur_usd_rate()
+            usd_total = usd + eur * rate
+            return {"eur": eur, "usd": usd, "usd_total": usd_total, "rate": rate}
+        except Exception as e:
+            print(f"[Trader] get_account_state: {e}")
+            return None

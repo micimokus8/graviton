@@ -167,13 +167,113 @@ def _execute_live_partial_exit(
         return "unchanged", f"Partial-Close fehlgeschlagen: {partial.message}"
     if trader.set_stop_loss(symbol, bias.lower(), new_stop):
         return "protected", ""
-
     emergency = trader.close_position(symbol, bias.lower(), close_pct=1.0)
     if emergency.success:
         return "closed", "Break-Even-SL fehlgeschlagen; Rest per Emergency-Close geschlossen"
     return "critical", (
         "KRITISCH: Break-Even-SL und Emergency-Close fehlgeschlagen — "
         f"{emergency.message}"
+    )
+
+
+def _last_live_fill(trader, symbol: str, entry_ts_ms: float) -> dict | None:
+    """Letzter echter Kraken-Fill seit Entry — Grundlage für Fill-Preis."""
+    fills = trader.get_fills_since(symbol, entry_ts_ms)
+    if not fills:
+        return None
+    last = fills[-1]
+    return {
+        "time": last.get("timestamp"),
+        "side": last.get("side"),
+        "amount": float(last.get("amount", 0) or 0),
+        "price": float(last.get("price", 0) or 0),
+    }
+
+
+def _live_fill_pnl(entry_price: float, fill_price: float, bias: str) -> float:
+    """PnL% auf Basis des echten Fill-Preises (statt Signal-Preis)."""
+    if entry_price <= 0 or fill_price <= 0:
+        return 0.0
+    if bias == "LONG":
+        return (fill_price - entry_price) / entry_price * 100
+    return (entry_price - fill_price) / entry_price * 100
+
+
+def _live_account_line(trader) -> str:
+    """Aktueller Konto-Stand als Telegram-Zeile (nach Exit)."""
+    if trader is None:
+        return "n/a"
+    return _account_str(trader)
+
+
+def _emit_exit(
+    mode: str, name: str, reason: str, level: str, close_pct: int, info: str,
+    entry_price: float, symbol: str, base: str, bias: str,
+    fill_price: float, rsi: float, account_before: str | None, trader,
+) -> float:
+    """Baut Telegram-Meldung + Log mit echtem Fill-Preis + Konto-Stand."""
+    pnl = _live_fill_pnl(entry_price, fill_price, bias)
+    pnl_icon = "🟢" if pnl >= 0 else "🔴"
+    account_after = _live_account_line(trader)
+    msg = (
+        f"📤 {mode} EXIT {close_pct}% {bias} {base}\n"
+        f"   Level:  {level} — {reason}\n"
+        f"   Preis:  {fill_price:.6f}\n"
+        f"   PnL:    {pnl_icon} {pnl:+.2f}%"
+        + (f" | RSI: {rsi}" if rsi else "")
+        + "\n"
+        f"   Info:   {info}\n"
+        f"{account_after}"
+    )
+    print(msg); tg(msg)
+    _log_trade("exit", symbol=symbol, base=base, bias=bias,
+               reason=reason, close_pct=close_pct,
+               pnl_pct=round(pnl, 2), price=fill_price,
+               rsi=rsi, session=name,
+               account_before=account_before, account_after=account_after)
+    return fill_price
+
+
+def _confirm_and_report(
+    mode: str, name: str, reason: str, level: str, close_pct: int, info: str,
+    entry_price: float, symbol: str, base: str, bias: str,
+    rsi: float, entry_ts_ms: float, account_before: str | None, trader,
+) -> float | None:
+    """Führt den echten Close aus und meldet NUR mit bestätigtem Fill.
+
+    Holt nach dem Close die echten Kraken-Fills, verwendet den letzten
+    echten Fill-Preis für PnL und hängt den Konto-Stand an. Gibt den
+    echten Fill-Preis zurück oder None wenn kein Fill bestätigt wurde.
+    """
+    if trader is None:
+        return None
+    result = trader.close_position(symbol, bias.lower())
+    if not result.success:
+        if "Keine Position" in str(result.message):
+            # Position war schon weg (z.B. externer SL) — echten Fill holen.
+            fill = _last_live_fill(trader, symbol, entry_ts_ms)
+            if fill and fill["price"] > 0:
+                return _emit_exit(
+                    mode, name, reason, level, close_pct, info, entry_price,
+                    symbol, base, bias, fill["price"], rsi,
+                    account_before, trader,
+                )
+            return None
+        err_msg = f"🚨 [{name}] {base}: {reason} - Close fehlgeschlagen — {result.message}"
+        print(err_msg); tg(err_msg)
+        return None
+    # Echter Fill bestätigt
+    fill_price = float(result.price or 0)
+    if fill_price <= 0:
+        fill = _last_live_fill(trader, symbol, entry_ts_ms)
+        if fill and fill["price"] > 0:
+            fill_price = fill["price"]
+        else:
+            return None
+    return _emit_exit(
+        mode, name, reason, level, close_pct, info, entry_price,
+        symbol, base, bias, fill_price, rsi,
+        account_before, trader,
     )
 
 
@@ -195,6 +295,19 @@ def _log_debug(cycle: int, base: str, bias: str, state: str, reason: str, **kwar
     }
     with open(DEBUG_LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def _account_str(trader) -> str:
+    """Konto-Stand als Telegram-Zeile: USD-Äquivalent (EUR+USD) + EUR."""
+    if trader is None or not trader.has_api_keys():
+        return "   Konto:  n/a"
+    state = trader.get_account_state()
+    if state is None:
+        return "   Konto:  Abruf-Fehler"
+    return (
+        f"   Konto:  {state['usd_total']:.2f} USD "
+        f"(EUR {state['eur']:.2f} / USD {state['usd']:.2f})"
+    )
 
 
 
@@ -587,6 +700,10 @@ def _run_session(session_key: str):
                            price=entry_price, ema20=signal.ema20,
                            stop_loss=stop_loss, mode=mode, session=name,
                            vol_ratio=round(vol_ratio, 2))
+                # Konto-Stand vor dem Trade + Entry-Zeitmarke (für echte Fills).
+                account_before = _account_str(trader) if (trader is not None and not DRY_RUN) else None
+                entry_ts_ms = _now_ts()
+                entry_account_line = f"\n{account_before}" if account_before else ""
                 entry_msg = (
                     f"🎯 {mode} ENTRY {bias} {base}\n"
                     f"   Price:  {entry_price:.8f}\n"
@@ -595,6 +712,7 @@ def _run_session(session_key: str):
                     f"   Vol:    {vol_ratio:.2f}x\n"
                     f"   SL:     {stop_loss:.8f}\n"
                     f"   Grund:  {signal.reasoning}"
+                    f"{entry_account_line}"
                 )
                 print(entry_msg); tg(entry_msg)
                 entry_engine.increment_step(symbol)
@@ -810,9 +928,32 @@ def _run_session(session_key: str):
 
         # Mutable state — updated during watcher loop
         current_step = 1
+        # Konto-Stand vor dem Trade (für Exit-Meldung)
+        account_before = _account_str(trader) if (trader is not None and not DRY_RUN) else None
 
         while _now_ts() < int(close_dt.timestamp() * 1000) - 30_000:
             try:
+                # ── Echte Position prüfen: extern geschlossen (SL) erkennen ──
+                if trader is not None and not DRY_RUN:
+                    live_contracts = trader.get_position_contracts(symbol, bias.lower())
+                    if live_contracts < 0:
+                        # Abfrage fehlgeschlagen — konservativ weitermachen, kein Fake.
+                        pass
+                    elif live_contracts == 0 and tracked.pattern_exit_done:
+                        # Position weg, obwohl wir noch Rest tracken → externer SL-Close.
+                        fill = _last_live_fill(trader, symbol, entry_ts_ms)
+                        if fill and fill["price"] > 0:
+                            _emit_exit(
+                                mode, name,
+                                "stop_loss", "2/3", 100,
+                                "Position extern geschlossen (SL) — Rest real gefillt",
+                                entry_price, symbol, base, bias,
+                                fill["price"], 0.0, account_before, trader,
+                            )
+                        entered = False
+                        watcher.remove_position(symbol)
+                        break
+
                 sig = exit_engine.check(
                     symbol=symbol, side=bias.lower(),
                     entry_price=entry_price, stop_loss=tracked.stop_loss,
@@ -823,11 +964,6 @@ def _run_session(session_key: str):
 
                 if sig.reason != ExitReason.NONE:
                     pct = int(sig.close_pct * 100)
-                    pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
-                          else ((entry_price - sig.price) / entry_price * 100)
-                    _log_trade("exit", symbol=symbol, base=base, bias=bias,
-                               reason=sig.reason.value, close_pct=pct, pnl_pct=round(pnl, 2),
-                               price=sig.price, rsi=sig.rsi, session=name)
 
                     if sig.reason in (ExitReason.PATTERN, ExitReason.PROFIT_LOCK):
                         level = "1/3"
@@ -842,50 +978,54 @@ def _run_session(session_key: str):
                                 else sig.price * (1 + trail)
                             )
                             trailing_start = f"Lock-Preis mit Trailing {EXIT['trailing_pct']}%"
-                        exit_msg = (
-                            f"📤 {mode} EXIT {pct}% {bias} {base}\n"
-                            f"   Level:  {level} — {sig.reason.value}\n"
-                            f"   Preis:  {sig.price:.6f}\n"
-                            f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
-                            f"   Info:   {sig.message}\n"
-                            f"   → Rest läuft mit SL: {trailing_start}"
-                        )
-                        print(exit_msg); tg(exit_msg)
-                        tracked.stop_loss = remaining_stop
-                        tracked.trailing_active = True
-                        tracked.trailing_price = remaining_stop
-                        tracked.pattern_exit_done = True
-                        current_step = 2
-                        watcher.add_position(tracked)
-                        if trader is not None:
+
+                        # 50%-Close erst ausführen (unter bestehendem SL-Schutz),
+                        # dann echten Fill holen und mit Fill-Preis melden.
+                        if trader is not None and not DRY_RUN:
                             status, error = _execute_live_partial_exit(
                                 trader, symbol, bias, remaining_stop
                             )
                             if error:
                                 error_msg = f"🚨 [{name}] {base}: {error}"
                                 print(error_msg); tg(error_msg)
-                        if trader is not None and status not in {"protected", "closed"}:
-                            entered = False
-                            watcher.remove_position(symbol)
-                            break
+                            if status not in {"protected", "closed"}:
+                                entered = False
+                                watcher.remove_position(symbol)
+                                break
+                            fill = _last_live_fill(trader, symbol, entry_ts_ms)
+                            fill_price = fill["price"] if (fill and fill["price"] > 0) else sig.price
+                            _emit_exit(
+                                mode, name,
+                                sig.reason.value, level, pct, sig.message,
+                                entry_price, symbol, base, bias,
+                                fill_price, sig.rsi, account_before, trader,
+                            )
+                        else:
+                            # DRY_RUN / kein Trader: Signal-Preis als Anzeige.
+                            _emit_exit(
+                                mode, name,
+                                sig.reason.value, level, pct, sig.message,
+                                entry_price, symbol, base, bias,
+                                sig.price, sig.rsi, account_before, trader,
+                            )
+
+                        tracked.stop_loss = remaining_stop
+                        tracked.trailing_active = True
+                        tracked.trailing_price = remaining_stop
+                        tracked.pattern_exit_done = True
+                        current_step = 2
+                        watcher.add_position(tracked)
                         print(f"  → 50% geschlossen + {trailing_start} aktiv: {remaining_stop:.6f}")
 
                     elif sig.reason in (ExitReason.EMA_OVEREXTENDED, ExitReason.SR_REACHED,
                                          ExitReason.RSI_EXTREME, ExitReason.STOP_LOSS):
                         level = "2/3"
-                        exit_msg = (
-                            f"📤 {mode} EXIT {pct}% {bias} {base}\n"
-                            f"   Level:  {level} — {sig.reason.value}\n"
-                            f"   Preis:  {sig.price:.6f}\n"
-                            f"   PnL:    {pnl:+.2f}% | RSI: {sig.rsi}\n"
-                            f"   Info:   {sig.message}"
+                        fill_price = _confirm_and_report(
+                            mode, name,
+                            sig.reason.value, level, pct, sig.message,
+                            entry_price, symbol, base, bias, sig.rsi, entry_ts_ms,
+                            account_before, trader,
                         )
-                        print(exit_msg); tg(exit_msg)
-                        if trader is not None:
-                            result = trader.close_position(symbol, bias.lower())
-                            if not result.success and "Keine Position" not in str(result.message):
-                                err_msg = f"🚨 [{name}] {base}: {sig.reason.value} - Close fehlgeschlagen — {result.message}"
-                                print(err_msg); tg(err_msg)
                         entered = False
                         watcher.remove_position(symbol)
                         break
@@ -897,21 +1037,13 @@ def _run_session(session_key: str):
                         if pos:
                             tracked.trailing_price = pos.trailing_price
                         if watcher.check_trailing_hit(symbol, sig.price):
-                            pnl = ((sig.price - entry_price) / entry_price * 100) if bias == "LONG" \
-                                  else ((entry_price - sig.price) / entry_price * 100)
-                            trail_msg = (
-                                f"📤 {mode} EXIT 100% {bias} {base}\n"
-                                f"   Level:  2/3 — Trailing Stop\n"
-                                f"   Preis:  {sig.price:.6f}\n"
-                                f"   PnL:    {pnl:+.2f}%\n"
-                                f"   Info:   Trailing getriggert @ {tracked.trailing_price:.6f}"
+                            fill_price = _confirm_and_report(
+                                mode, name,
+                                "trailing_stop", "2/3", 100,
+                                f"Trailing getriggert @ {tracked.trailing_price:.6f}",
+                                entry_price, symbol, base, bias, 0.0, entry_ts_ms,
+                                account_before, trader,
                             )
-                            print(trail_msg); tg(trail_msg)
-                            if trader is not None:
-                                result = trader.close_position(symbol, bias.lower())
-                                if not result.success and "Keine Position" not in str(result.message):
-                                    err_msg = f"🚨 [{name}] {base}: Trailing-Close fehlgeschlagen — {result.message}"
-                                    print(err_msg); tg(err_msg)
                             entered = False
                             watcher.remove_position(symbol)
                             break
@@ -924,6 +1056,17 @@ def _run_session(session_key: str):
         # LIVE Session-Ende
         if entered and trader is not None:
             results = watcher.close_all_session_end()
+            # Rest-Position wurde geschlossen — als echten Exit mit Fill melden.
+            fill = _last_live_fill(trader, symbol, entry_ts_ms)
+            if fill and fill["price"] > 0:
+                _emit_exit(
+                    mode, name,
+                    "session_end", "3/3", 100,
+                    "Session-Ende — Position geschlossen",
+                    entry_price, symbol, base, bias,
+                    fill["price"], 0.0, account_before, trader,
+                )
+            entered = False
 
     # ─── Session End (beide Modi) ────────────────────────────────
 
