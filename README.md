@@ -9,26 +9,28 @@ the NY session open. It scans for coins with strong intraday moves (3%+ / 24h),
 determines directional bias from 4H/1H/15m EMA structure, then enters on a
 5m EMA20 pullback confirmed by a closed rejection candle.
 
-- **Sessions:** NY (13:30–16:00 UTC) and Asia (00:00–02:00 UTC)
-- **Exchange:** Kraken Perpetuals via CCXT (308 USD linear perps)
+- **Sessions:** NY (12:50–16:00 UTC polling; Asia paused)
+- **Exchange:** Kraken Perpetuals via CCXT (USD linear perps)
 - **Leverage:** 1x Isolated
-- **Mode:** Dry-Run by default (`DRY_RUN = True`)
-- **No LLM. Pure Python. Deterministic signals.**
+- **Mode:** **LIVE** since 27.09.2026 (`DRY_RUN = False`)
+- **LLM:** optional shadow-only bias (observation; never controls trades)
+- **Sentiment context:** 1H+4H market-breadth scan, log-only (no filter yet)
 
 ## Strategy
 
 ```
 Scan → Bias (4H/1H/15m, 2-of-3) → Entry (5m EMA20 pullback) → Exit
+                        ↓
+              Market Breadth 1H+4H (log-only, Trade-Log-Kontext)
 ```
 
-### 1. Scan — Momentum Filter (30 min before session)
+### 1. Scan — Momentum Filter (~30 min before session)
 
-- 24h Change: 3%+ (min 3%, no upper limit — Futures ticker differs from spot)
-- 24h Volume: > $750,000 USD (Ticker-based; OHLCV validation after volume filter)
-- Max 8 coins on watchlist
-- Sorted by abs(change) descending
+- 24h Change: 3%+ (no upper limit — Futures ticker differs from spot)
+- 24h Volume: > $500,000 USD (Ticker-based; OHLCV validation after volume filter)
+- Max 8 coins on watchlist, sorted by abs(change) descending
 
-### 2. Bias — Multi-Timeframe EMA Structure (13:45 UTC)
+### 2. Bias — Multi-Timeframe EMA Structure (12:45 UTC)
 
 The bias is calculated by the bias cron from closed candles on 4H, 1H and 15m.
 At least two of the three timeframes must agree:
@@ -36,17 +38,29 @@ At least two of the three timeframes must agree:
 - **LONG:** at least 2× BULLISH
 - **SHORT:** at least 2× BEARISH
 - Otherwise: **NOISE** and no entry permission
+- 4H exhaustion check demotes stale trends to NEUTRAL
 - Session volume is evaluated in the bias stage; it is not re-filtered in the entry engine
 - The session reads the bias snapshot and does not recalculate bias independently
 
+**LLM shadow (optional):** `shadow_runner.py` asks the LLM for a second opinion
+per coin and writes it to `bias_shadow_history.jsonl` for weekly evaluation.
+`effective_bias` always stays deterministic — the LLM never authorizes, blocks
+or changes a trade.
+
+**Market breadth (log-only):** `breadth.py` scans BTC/ETH/SOL + top-20 perps
+on **1H + 4H** at bias time and writes `data/market_sentiment.json`
+(LONG / SHORT / CHOPPY). Every trade-log entry carries this sentiment for
+later evaluation. **It does not filter trades yet** — the historical backtest
+(`backtest_breadth.py`) decides whether it will become a filter.
+
 ### 3. Entry — 5m EMA20 Pullback (during the bounded bias window)
 
-There is only one active entry mode: a confirmed 5m EMA20 pullback. The former
-RSI-based Fast Entry was removed because it bypassed rejection confirmation.
+There is only one active entry mode: a confirmed 5m EMA20 pullback.
 
 Entry requires:
 
-1. Current price is within the dynamic EMA20 distance band.
+1. Current price is within the dynamic EMA20 distance band
+   (0.50 % base, scaled by 24h change up to 1.50 %).
 2. One of the last three fully closed 5m candles confirms rejection:
    - LONG: bullish candle with its low near EMA20
    - SHORT: bearish candle with its high near EMA20
@@ -55,34 +69,41 @@ Entry requires:
 
 Entry behavior:
 
-- No new entry is allowed after **20 minutes from the bias file timestamp** or after session close.
+- No new entry after **30 minutes from the bias file timestamp** or after session close.
 - All active candidates are checked every 30 seconds in each cycle.
-- The cycle checks every candidate first, then prioritizes the currently closest EMA20 signal.
-- 3/3 vs. 2/3 bias strength is retained as the stable tie-breaker.
+- **Candidate sorting (since 10.10.):** signals are sorted by **bias strength first**
+  (3/3 before 2/3), EMA distance only as tie-breaker — a weak 2/3 pullback can
+  no longer beat a strong 3/3 signal (ZRO 10.10. regression case).
 - S/R is checked before rotation and again at the actual entry price.
 - BTC 1m counter-trend correlation can skip an otherwise valid candidate.
 - Volume is handled by scan/bias, not duplicated as an entry filter.
-- Initial SL: `max(1.0 × 1H ATR, 0.9%)`.
+- Initial SL: `min(max(1.0 × 1H ATR, 0.9%), 2.5%)`.
 - One position per session, with the configured exposure limit.
 
-### 4. Exit — 3 Levels
+### 4. Exit — LIVE uses the "dry-run parity" engine
 
-| Level | Trigger | Action | SL After |
-|-------|---------|--------|----------|
-| **1/3** | Candlestick reversal pattern (e.g., Shooting Star, Engulfing) or +1% profit lock | Close 50% | Move SL to entry (break-even) + Trailing |
-| **2/3** | EMA overextended (>2.5%), S/R reached, RSI extreme, Trailing Stop hit, or original SL | Close 100% | — |
-| **3/3** | Session end (16:00 NY / 02:00 Asia UTC) | Force close all | — |
+In LIVE, only the conservative exit mechanisms are active
+(`structural_exits = False`, `pattern_exit_50 = False` — same as the DRY_RUN sim):
+
+| Level | Trigger | Action |
+|-------|---------|--------|
+| **1/3** | Profit lock at +1.05% | Close 50%, rest → trailing stop |
+| **2/3** | Trailing stop hit (0.5%) or initial SL | Close 100% |
+| **3/3** | Session end (16:00 UTC) | Force close all |
+
+Every exit reports the **real Kraken fill price** and the account balance —
+never the signal price (phantom-exit bug fixed, Oct 2026).
 
 ### Telegram Updates
 
-Every key event is delivered live via Telegram. DRY_RUN includes simulated exits with PnL at session end:
+Every key event is delivered live via Telegram. Exits include real fill price,
+PnL and account balance:
 
 ```
-🧠 [NY] Bias: 🟢 AAVE: LONG | RSI 67.9
-👁 [NY] Entry-Polling — 3 candidates (30s rotation)
-🎯 [DRY RUN] ENTRY LONG AAVE @ 96.11 | SL 94.64 | Pullback: 5m Rejection an EMA
-📤 [DRY RUN] EXIT 100% LONG AAVE @ session_end | PnL: 🟢 +4.85%
-✅ [NY] Session Ende
+🧠 [NY] Bias: 🟢 NEAR: LONG (3/3) 4H:BULLISH 1H:BULLISH 15m:BULLISH
+🎯 [LIVE] ENTRY LONG NEAR @ 0.493 | SL 0.487 | Pullback: 5m Rejection an EMA
+📤 [LIVE] EXIT 100% SHORT ZRO @ 1.989100 | PnL: 🔴 -1.55% | Konto: 564.67 USD
+✅ [NY] Session Ende — 16:00 UTC
 ```
 
 ## Project Structure
@@ -94,19 +115,30 @@ graviton/
 ├── scanner.py           # Kraken Futures screener via CCXT
 ├── bias.py              # 4H/1H/15m multi-timeframe bias (2-of-3)
 ├── entry.py             # 5m EMA20 pullback + rejection entry
-├── exit.py              # 3-level exit engine (Pattern / Structural / Session)
+├── exit.py              # 3-level exit engine (SL / Profit-Lock / Trailing / Session)
 ├── sr_levels.py         # Weekly/Daily support & resistance
 ├── patterns.py          # Candlestick pattern detection (ta-lib + pure fallback)
 ├── trader.py            # CCXT Kraken Futures order execution (open/SL/close)
 ├── watcher.py           # Position monitor + trailing stop
 ├── telegram_sender.py   # Direct Telegram Bot API for live updates
+├── breadth.py           # Market breadth sentiment 1H+4H (log-only)
+├── backtest_breadth.py  # Historical breadth evaluation of LIVE trades
+├── llm_bias.py          # Optional LLM shadow bias (observation only)
+├── shadow_runner.py     # Out-of-process LLM shadow enrichment + history
+├── candidate_ranking.py # Deterministic ranking + LLM shadow ranking
+├── feature_snapshot.py  # Deterministic technical features for LLM shadow
+├── volume_metrics.py    # Session-volume ratio helpers
+├── candle_utils.py      # Closed-candle OHLCV helpers (shared)
+├── atomic_json.py       # Atomic JSON writes (state files)
 ├── scripts/
 │   ├── list_kraken_perps.py
-│   ├── graviton_session_ny.sh  # nohup session runner
-│   ├── graviton_bias_ny.sh     # standalone bias output
+│   ├── graviton_scan_ny.sh      # scan cron
+│   ├── graviton_bias_ny.sh      # bias cron + shadow + breadth
+│   ├── graviton_session_ny.sh   # session cron (nohup)
 │   └── scan_cron.sh
-├── data/                # Runtime data (watchlist, bias, entry state, debug logs)
+├── data/                # Runtime data (watchlist, bias, entry state, logs)
 ├── logs/
+├── tests/               # pytest suite (112 tests)
 ├── requirements.txt
 ├── GravitonLogo.png
 └── README.md
@@ -131,39 +163,59 @@ python scanner.py
 ```bash
 python scanner.py                          # Scan only (no API key needed)
 python scanner.py --list-perps             # List all Kraken perps
-python session.py ny                       # Full NY session (dry run)
-python session.py asia                     # Full Asia session (dry run)
+python session.py ny                       # Full NY session (LIVE)
+python session.py asia                     # Full Asia session (currently paused)
+python breadth.py                          # Market sentiment scan (log-only)
+python backtest_breadth.py                 # Breadth backtest over LIVE trades
+python backtest_breadth.py --tfs=1h,4h,1d  # Optionally include 1D (default: 1h,4h)
+python shadow_runner.py data/bias_result.json  # LLM shadow enrichment
+python -m pytest tests/ -q                 # Run the test suite
 ```
 
 ### Live Mode
 
-Set `DRY_RUN = False` in `config.py`. Start with dry-run for at least one week.
+`DRY_RUN = False` in `config.py` (current). The bot places real Kraken Futures
+orders from the NY session. SL is a hard exchange stop-order (`reduceOnly`,
+mark-triggered); take-profit is watcher-side only (if the watcher dies, the SL
+still protects, but there is no exchange-side TP).
 
 ## Cron Jobs (Hermes Agent)
 
 ```
-Job              UTC     CEST    Description
+Job              UTC     CEST*   Description
 ───────────────  ──────  ──────  ───────────────────────────────
-NY Scan (pre)    13:30   15:30   Writes watchlist for bias
-NY Bias          13:45   15:45   4H/1H/15m bias (2-of-3)
-NY Session       13:50   15:50   Polling starts; entries limited to 20 min after bias
+NY Scan (pre)    12:30   14:30   Writes watchlist for bias
+NY Bias          12:45   14:45   4H/1H/15m bias → shadow → breadth
+NY Session       12:50   14:50   Polling; entries limited to 30 min after bias
 Asia Scan        23:30   01:30   Paused
 Asia Session     00:00   02:00   Paused
 ```
 
+*CEST during summer time; schedules are UTC-internally consistent and shift
+±1h in local time on DST boundaries (winter-time reminder cron on 24.10.).
+
 - **Scan** saves watchlist to `data/watchlist.json`
-- **Bias** runs at 13:45 UTC and writes the multi-timeframe snapshot
+- **Bias** runs at 12:45 UTC, writes the multi-timeframe snapshot, then runs
+  LLM shadow enrichment and the market-breadth scan (both fail-soft)
 - **Entry** uses only the bias snapshot; no independent bias recalculation
-- **Session** uses `nohup` to survive cron timeouts
+- **Session** runs as a background process so it survives cron timeouts
 - Empty watchlist → session skips automatically
 
-### Debug Logs
+### Trade Log
+
+`data/trade_log.jsonl` records every entry and exit with context:
+
+```json
+{"event":"entry","symbol":"NEAR/USD:USD","bias":"LONG","signal_count":3,
+ "dist_pct":0.493,"market_sentiment":"LONG","market_breadth":"1H:15B/0S 4H:16B/1S"}
+{"event":"exit","base":"ZRO","reason":"stop_loss","close_pct":100,
+ "pnl_pct":-1.55,"market_sentiment":"CHOPPY", ...}
+```
 
 `data/session_debug.jsonl` contains one entry per coin per polling cycle:
 
 ```json
-{"cycle":1, "base":"FARTCOIN", "state":"no_entry", "reason":"Preis -0.06% unter EMA20 — kein LONG"}
-{"cycle":2, "base":"AAVE", "state":"entered", "reason":"Pullback: 5m Rejection an EMA (0.17%, 0 Kerze(n) zurück)"}
+{"cycle":1, "base":"ZRO", "bias":"SHORT", "state":"entered", "dist":0.114}
 ```
 
 If no entry occurs, a Telegram summary explains why for each candidate.
@@ -172,40 +224,44 @@ If no entry occurs, a Telegram summary explains why for each candidate.
 
 | Section | Key | Value | Description |
 |---------|-----|-------|-------------|
-| DRY_RUN | — | `True` | No live orders |
-| SESSIONS | ny/asia | 13:30/00:00 | Session open/close (UTC) |
-| SCAN | min/max_change_pct | 3.0 / 99.0 | 24h change filter (upper limit effectively disabled) |
+| DRY_RUN | — | `False` | **LIVE** trading |
+| SESSIONS | ny/asia | 12:30/00:00 open, 16:00/02:00 close | Session times (UTC); cron starts polling ~12:50 |
+| SCAN | min_change_pct | 3.0 | 24h change filter |
 | SCAN | min_volume_eur | 500_000 | Min 24h volume |
 | BIAS | min_candles | 4 | Candles needed for bias |
 | BIAS | min_session_vol_ratio | 0.7 | Minimum session-volume ratio |
-| BIAS | rsi_long_max/short_min | 80 / 20 | RSI bias block |
-| ENTRY | ema_distance_max | 0.50 | Base EMA distance (scaled by 24h change) |
-| ENTRY | sl_offset_pct | 0.90 | Minimum initial SL; effective SL is max(1.0× 1H ATR, 0.9%) |
-| ENTRY | ema_period | 20 | EMA length |
-| SR | min_distance_pct | 0.50 | S/R entry block (fallback if all blocked) |
-| POSITION | account_risk_pct_per_coin | 17.5 | ~$100 at $570 equity |
-| EXIT | ema_overextended_pct | 2.50 | EMA structural exit |
-| EXIT | trailing_pct | 0.30 | Trailing stop distance |
-| EXIT | rsi_extreme_long/short | 78 / 22 | RSI extreme exit |
+| ENTRY | ema_distance_max | 0.50 | Base EMA distance (dynamically scaled to 1.50) |
+| ENTRY | sl_offset_pct | 0.90 | Minimum initial SL (of the effective SL formula) |
+| ENTRY | sl_cap_pct | 2.50 | Max SL distance (protects against ATR spikes) |
+| ENTRY | max_stair_steps | 1 | Only the first pullback per session |
+| ENTRY | max_parallel_coins | 1 | One position per session |
+| SR | min_distance_pct | 0.50 | S/R entry block |
+| POSITION | account_risk_pct_per_coin | 8.75 | Position size (~$50 at ~$570) |
+| EXIT | profit_lock_pct | 1.05 | 50% close level |
+| EXIT | trailing_pct | 0.50 | Trailing stop for remaining half |
+| EXIT | structural_exits | `False` | Pattern/EMA/RSI/S-R exits OFF in LIVE |
+| EXIT | rsi_extreme_long/short | 78 / 22 | Reserved (inactive with structural_exits) |
+| BREADTH | TIMEFRAMES | `("1h", "4h")` | Sentiment timeframes (1D removed: too laggy) |
+| LLM | LLM_BIAS_ENABLED | `.env` (`true`) | Shadow-only second opinion |
 
-### Change Log (July 2026)
+## Change Log
 
 | Change | Before | After | Reason |
 |--------|--------|-------|--------|
-| **Bias timing** | Session-momentum snapshot | **4H/1H/15m, 2-of-3** | Multi-timeframe directional confirmation |
-| **Entry rotation** | Single coin, 2h loop | **All candidates, 30s cycle** | Closest valid EMA20 signal first |
-| **Entry mode** | Fast Entry + rejection modes | **5m closed-candle rejection only** | No blind RSI entry |
-| **Entry window** | Until session close | **20 min after bias, capped by close** | Prevent stale-bias entries |
-| **SL** | 0.30× 1H ATR, min 0.3% | **1.0× 1H ATR, min 0.9%** | Wider SL for pullback noise |
-| **EMA distance** | Fixed 0.30% | **Dynamic 0.50-1.00%** | Adapt to volatility |
-| **S/R blocking** | Hard block → session end | **Fallback to best candidate** | Price moves during session |
-| **Debug logging** | trade_log.jsonl only | **session_debug.jsonl** per cycle | Post-mortem analysis |
-| **DRY_RUN exit** | None (phantom positions) | **Simulated exit at session end** | See PnL of every trade |
-| **Session timeout** | Cron kills after ~10 min | **nohup background process** | Full duration guaranteed |
+| **Mode** | DRY_RUN | **LIVE** (27.09.2026) | Go-live after dry-run validation |
+| **SL cap** | 1.5% | **2.5%** | 1.5% sat below coin ATR → routine stop-outs |
+| **Position size** | 17.5% | **8.75%** | Halved for conservative LIVE start |
+| **Candidate sorting** | EMA distance only | **3/3 before 2/3, distance as tie-breaker** | Weak 2/3 pullbacks beat strong 3/3 signals (ZRO 10.10.) |
+| **Entry window** | 20 min | **30 min** | High-momentum days need more pullback time |
+| **Market breadth** | — | **1H+4H scan, log-only** | Day-trading sentiment context for trade logs |
+| **Breadth evaluation** | — | `backtest_breadth.py` | Decides on filter activation from data |
+| **LLM shadow** | — | optional, observation only | Weekly deterministic-vs-LLM comparison |
+| **Exit reporting** | signal price | **real Kraken fill + account balance** | No phantom PnL messages |
+| **Bias volume** | re-filtered in entry | **scan/bias only** | Single responsibility per stage |
 
 ## API Keys
 
-Kraken Futures API keys at https://www.kraken.com/u/security/api  
+Kraken Futures API keys at https://www.kraken.com/u/security/api
 Required: **Futures Trading** permission (not Spot).
 
 ## Requirements
@@ -219,5 +275,5 @@ TA-Lib>=0.4.28
 
 ## Disclaimer
 
-This bot executes real trades. Use at your own risk.  
+This bot executes real trades. Use at your own risk.
 Start with small capital (min. 100 USD). Always test with `DRY_RUN = True` first.
