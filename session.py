@@ -37,6 +37,8 @@ DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, St
 WATCHLIST_MAX_AGE_SECONDS = 45 * 60
 BIAS_MAX_AGE_SECONDS = 15 * 60
 ENTRY_WINDOW_SECONDS = 30 * 60
+MARKET_SENTIMENT_FILE = DATA_DIR / "market_sentiment.json"
+MARKET_SENTIMENT_MAX_AGE_SECONDS = 6 * 60 * 60  # eine Session lang gültig (log-only Kontext)
 
 
 
@@ -57,6 +59,28 @@ def _state_file_fresh(
     reference = time.time() if now_ts is None else now_ts
     age = reference - path.stat().st_mtime
     return -5 <= age <= max_age_seconds
+
+
+def _load_market_sentiment() -> dict | None:
+    """Load market_sentiment.json (fresh) as log-only trade context.
+
+    Never filters or blocks a trade — the field is only attached to
+    trade_log entries for later (Baustein 3) evaluation. Returns None
+    when the file is missing, stale, or unreadable (fail-soft).
+    """
+    if not _state_file_fresh(MARKET_SENTIMENT_FILE, MARKET_SENTIMENT_MAX_AGE_SECONDS):
+        return None
+    try:
+        with open(MARKET_SENTIMENT_FILE) as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+# Entry-Kontext für Exit-Logs: wird beim Entry gesetzt und an jeden
+# Exit-Eintrag angehängt (signal_count, EMA-Distanz), damit Trade-Logs
+# die nachträgliche Auswertung (Baustein 3) ermöglichen.
+_entry_meta: dict = {}
 
 
 def _entry_deadline(bias_file: Path, close_dt: datetime) -> datetime:
@@ -285,8 +309,22 @@ def _confirm_and_report(
 
 
 def _log_trade(event: str, **kwargs):
-    """Trade-Event in JSONL loggen."""
+    """Trade-Event in JSONL loggen — inkl. Markt-Sentiment-Kontext.
+
+    Hängt das (log-only) Market-Sentiment aus market_sentiment.json an
+    jeden Trade-Eintrag an. Exit-Einträge tragen zusätzlich den Entry-
+    Kontext (signal_count, EMA-Distanz) für die spätere Auswertung.
+    Ist keine frische Sentiment-Datei vorhanden, wird der Kontext einfach
+    weggelassen (fail-soft, kein Filter).
+    """
     entry = {"timestamp": datetime.now(timezone.utc).isoformat(), "event": event, **kwargs}
+    sentiment = _load_market_sentiment()
+    if sentiment:
+        entry["market_sentiment"] = sentiment.get("sentiment", "UNKNOWN")
+        entry["market_breadth"] = sentiment.get("detail", "")
+    if event == "exit" and _entry_meta:
+        entry.setdefault("signal_count", _entry_meta.get("signal_count"))
+        entry.setdefault("dist_pct", _entry_meta.get("dist_pct"))
     with open(TRADE_LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
@@ -425,6 +463,22 @@ def _check_btc_1m_trend() -> str:
         return "neutral"
     except Exception:
         return "neutral"
+
+
+def _sort_cycle_signals(cycle_signals: list) -> list:
+    """Sortiert Entry-Signale eines Zyklus: Signalstärke zuerst, dann EMA-Distanz.
+
+    Vorher sortierte reine EMA-Distanz (nähester Pullback gewann) und
+    überschrieb damit die 3/3-vor-2/3-Bevorzugung aus der Kandidatenliste —
+    so konnte ein schwacher 2/3 SHORT mit 0.1% Distanz einen starken 3/3 LONG
+    mit 0.5% Distanz schlagen (belegt: ZRO SHORT 10.10 obwohl 5 LONGs).
+    Jetzt: −signal_count primär (3/3 vor 2/3), EMA-Distanz nur Tie-Breaker.
+    """
+    return sorted(
+        cycle_signals,
+        key=lambda item: (-int(item[0].get("signal_count", 0) or 0),
+                          float(item[1].distance_pct)),
+    )
 
 
 def main():
@@ -641,7 +695,10 @@ def _run_session(session_key: str):
             except Exception as e:
                 print(f"  {base}: Entry-Fehler — {e}")
 
-        cycle_signals.sort(key=lambda item: item[1].distance_pct)
+        # Signalstärke zuerst (3/3 vor 2/3), EMA-Distanz nur als Tie-Breaker.
+        # Vorher: reine Distanz-Sortierung ließ schwache Pullbacks starke
+        # Signale schlagen (ZRO SHORT 10.10 bei 5 verfügbaren LONGs).
+        cycle_signals = _sort_cycle_signals(cycle_signals)
         for cand, signal in cycle_signals:
             symbol = cand["symbol"]
             bias = cand["bias"]
@@ -703,10 +760,17 @@ def _run_session(session_key: str):
                         return
 
                 # Erst nach bestätigtem DRY_RUN-Entry bzw. geschütztem LIVE-Fill loggen.
+                global _entry_meta
+                _entry_meta = {
+                    "signal_count": int(cand.get("signal_count", 0) or 0),
+                    "dist_pct": round(float(signal.distance_pct), 4),
+                }
                 _log_trade("entry", symbol=symbol, base=base, bias=bias,
                            price=entry_price, ema20=signal.ema20,
                            stop_loss=stop_loss, mode=mode, session=name,
-                           vol_ratio=round(vol_ratio, 2))
+                           vol_ratio=round(vol_ratio, 2),
+                           signal_count=_entry_meta["signal_count"],
+                           dist_pct=_entry_meta["dist_pct"])
                 # Konto-Stand vor dem Trade + Entry-Zeitmarke (für echte Fills).
                 account_before = _account_str(trader) if (trader is not None and not DRY_RUN) else None
                 entry_ts_ms = _now_ts()

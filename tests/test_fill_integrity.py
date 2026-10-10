@@ -69,6 +69,7 @@ def test_last_live_fill_uses_fill_price():
 
 def test_emit_exit_meldet_konto_stand():
     t = MockTrader()
+    orig_log_trade = session._log_trade
     session._log_trade = lambda *a, **kw: None  # nicht ins echte Log schreiben
     # Telegram sendet nicht wirklich — nur aufbauen checken
     msgs = []
@@ -83,6 +84,7 @@ def test_emit_exit_meldet_konto_stand():
         )
     finally:
         session.tg = orig_tg
+        session._log_trade = orig_log_trade
     assert msgs, "keine Telegram-Meldung erzeugt"
     msg = msgs[-1]
     assert "1190.17" in msg, f"Fill-Preis fehlt in Meldung: {msg}"
@@ -101,7 +103,8 @@ def test_confirm_and_report_keine_position_nutzt_fill():
         ],
         close_success=False, close_message="Keine Position",
     )
-    session._log_trade = lambda *a, **kw: None
+    orig_log_trade = session._log_trade
+    session._log_trade = lambda *a, **kw: None  # nicht ins echte Log schreiben
     msgs = []
     orig_tg = session.tg
     session.tg = lambda m: msgs.append(m)
@@ -114,6 +117,7 @@ def test_confirm_and_report_keine_position_nutzt_fill():
         )
     finally:
         session.tg = orig_tg
+        session._log_trade = orig_log_trade
     assert fill_price == 1190.17, f"fill_price={fill_price}"
     msg = msgs[-1]
     assert "1190.17" in msg and "+1.24%" in msg, f"Fake erkannt: {msg=}"
