@@ -1043,10 +1043,23 @@ def _run_session(session_key: str):
                             trailing_start = "Break-Even"
                         else:
                             trail = EXIT["trailing_pct"] / 100
+                            # Anker: Live-Marktpreis statt veraltetem 1m-Candle-Close.
+                            # Verhindert, dass der Lock-Stop unter/über dem Markt
+                            # landet und sofort feuert (Guard in set_stop_loss fängt
+                            # den Rest ab, aber richtiger Anker vermeidet die Korrektur).
+                            live_price = sig.price
+                            if trader is not None:
+                                try:
+                                    ticker = trader._get_exchange().fetch_ticker(symbol)
+                                    mark = float(ticker.get("info", {}).get("markPrice", 0) or 0)
+                                    if mark > 0:
+                                        live_price = mark
+                                except Exception:
+                                    pass
                             remaining_stop = (
-                                sig.price * (1 - trail)
+                                live_price * (1 - trail)
                                 if bias == "LONG"
-                                else sig.price * (1 + trail)
+                                else live_price * (1 + trail)
                             )
                             trailing_start = f"Lock-Preis mit Trailing {EXIT['trailing_pct']}%"
 

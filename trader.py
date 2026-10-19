@@ -285,6 +285,35 @@ class KrakenTrader:
             ndigits = self._price_precision(symbol)
             sl_rounded = round(stop_price, ndigits)
 
+            # ── Safety: stop darf niemals auf der falschen Marktseite landen ──
+            # Wurde z.B. vom Close einer veralteten 1m-Kerze abgeleitet, während
+            # der Live-Markt schon weiter gelaufen ist → Stop wäre durch den Markt
+            # und würde sofort als Market-Order feuern.
+            MIN_DIST = 0.003  # 0.3% Mindestabstand vom Mark-Preis
+            try:
+                ticker = ex.fetch_ticker(symbol)
+                mark = float(ticker.get("info", {}).get("markPrice", 0) or 0)
+                if mark <= 0:
+                    mark = float(ticker.get("last", 0) or 0)
+            except Exception:
+                mark = 0
+
+            if mark > 0:
+                if side == "short":
+                    safe_min = mark * (1 + MIN_DIST)
+                    if sl_rounded <= safe_min:
+                        old_sl = sl_rounded
+                        sl_rounded = round(safe_min, ndigits)
+                        print(f"[Trader] ⚠ SL {old_sl:.6f} ≤ Mark {mark:.6f} → "
+                              f"korrigiert auf {sl_rounded:.6f} (SHORT-Stop muss ABOVE)")
+                else:  # long
+                    safe_max = mark * (1 - MIN_DIST)
+                    if sl_rounded >= safe_max:
+                        old_sl = sl_rounded
+                        sl_rounded = round(safe_max, ndigits)
+                        print(f"[Trader] ⚠ SL {old_sl:.6f} ≥ Mark {mark:.6f} → "
+                              f"korrigiert auf {sl_rounded:.6f} (LONG-Stop muss BELOW)")
+
             # Identify the existing SL so it can be cancelled only after the
             # new SL is accepted. Keeps the previous reduceOnly protection in
             # place if the new submit fails.

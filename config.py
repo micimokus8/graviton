@@ -81,7 +81,7 @@ ENTRY = {
     "ema_smoothing":      9,
     "ema_distance_max":   0.50,    # Basis-Distanz; wird dynamisch via 24h-Change skaliert
     "sl_offset_pct":      0.90,    # Mindest-SL; effektiver SL = min(max(1.0× 1H-ATR, 0.9%), Cap)
-    "sl_cap_pct":         2.50,     # Maximal-SL; bei 2.5% deckelt er ATR-Spikes (vorher 1.5% zu eng → normale Dips)
+    "sl_cap_pct":         5.0,     # Maximal-SL; 5% gibt Krypto-Intraday genug Luft (vorher 2.5% zu eng)
     "max_stair_steps":    1,       # Start: nur erster Pullback
     "max_parallel_coins": 1,
 }
@@ -110,7 +110,7 @@ _position_size_usd = EQUITY_USD * (POSITION["account_risk_pct_per_coin"] / 100)
 EXIT = {
     "ema_overextended_pct":  2.50,    # Preis > 2.5% von EMA → struktureller Exit (inaktiv, siehe structural_exits)
     "trailing_pct":          0.50,    # Trailing Stop Abstand für die Rest-Hälfte
-    "profit_lock_pct":        1.05,    # 50% sichern, danach Rest trailing
+    "profit_lock_pct":        2.0,    # 50% sichern, danach Rest trailing (2% bei 5% SL → 1:2.5 R:R)
     "pattern_exit_50":       False,   # Pattern aus — Live = DRY RUN (1m-Umkehr vs 5m-Pullback-Konflikt)
     "structural_exits":      False,   # EMA/RSI/S/R aus — Live = DRY RUN (nur SL + Profit-Lock + Trailing)
     "rsi_extreme_long":      78,

@@ -122,43 +122,53 @@ class EntryEngine:
         """
         Prüft ob die letzte Kerze eine Rejection ist.
 
-        LONG Rejection:
-          - Grüne Kerze (close > open)
-          - Low nahe EMA (weniger als 0.15% drunter)
-          - Body > obere Wick
-
-        SHORT Rejection:
-          - Rote Kerze (close < open)
-          - High nahe EMA (weniger als 0.15% drüber)
-          - Body > untere Wick
+        Gelockert für Krypto-Volatilität (v2):
+          - Wick-Toleranz 0.5% statt 0.3% (tiefere EMA-Penetration normal)
+          - Body/Wick-Ratio ≥ 0.25 statt 0.5 (erlaubt Kerzen mit moderatem Wick)
+          - NEU: Kerze muss stark in Richtung schließen (Close im oberen/
+            unteren 40%-Bereich der Range) — trennt echten Bounce von
+            schwacher Berührung, ohne die Pullback-Logik zu blockieren.
         """
         body = abs(close - open_)
         if body == 0:
             return False
 
+        WICK_TOLERANCE_PCT = 0.5   # 5m-Kerze darf 0.5% durch die EMA wicken
+        MIN_BODY_RATIO = 0.25       # Body muss ≥ 25% des Wicks sein
+
+        candle_range = high - low
+        if candle_range <= 0:
+            return False
+
         if bias == "LONG":
-            # Grüne Kerze
             if close <= open_:
                 return False
-            # Low sollte nah an EMA sein (EMA diente als Support)
+            # Low nahe EMA (Support)
             low_dist = (ema - low) / ema * 100
-            if low_dist > 0.3:
+            if low_dist > WICK_TOLERANCE_PCT:
                 return False
-            # Body sollte signifikant sein vs obere Wick
+            # Close muss im oberen Bereich der Kerze liegen (starker Schluss)
+            if close < low + candle_range * 0.6:
+                return False
             upper_wick = high - close
-            return body > upper_wick * 0.5
+            if upper_wick <= 0:
+                return True  # Kein oberer Wick → klare Rejection
+            return body >= upper_wick * MIN_BODY_RATIO
 
         elif bias == "SHORT":
-            # Rote Kerze
             if close >= open_:
                 return False
-            # High nah an EMA (EMA diente als Resistance)
+            # High nahe EMA (Resistance)
             high_dist = (high - ema) / ema * 100
-            if high_dist > 0.3:
+            if high_dist > WICK_TOLERANCE_PCT:
                 return False
-            # Body dominant vs upper wick (Rejection nach unten)
-            upper_wick = high - max(open_, close)
-            return body > upper_wick * 0.5
+            # Close muss im unteren Bereich der Kerze liegen (starker Schluss)
+            if close > low + candle_range * 0.4:
+                return False
+            lower_wick = min(open_, close) - low
+            if lower_wick <= 0:
+                return True  # Kein unterer Wick → klare Rejection
+            return body >= lower_wick * MIN_BODY_RATIO
 
         return False
 
