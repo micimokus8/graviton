@@ -124,6 +124,17 @@ class ExitEngine:
             ema20 = price
         dist = abs(price - ema20) / ema20 * 100
         rsi_val = self._rsi(closes)
+        # RSI-Anzeige auf 15m-Basis (Chart-konform). Der 1m-RSI (14 Min)
+        # springt minutenschnell und ist mit Chart-RSI nicht vergleichbar.
+        # Die RSI_EXTREME-Schwelle (78/22) ist auf höherem TF ohnehin
+        # sinnvoller kalibriert (structural_exits aktuell deaktiviert).
+        try:
+            data15 = closed_ohlcv(self._get_exchange().fetch_ohlcv(
+                symbol, timeframe="15m", limit=30), "15m")
+            if len(data15) >= 15:
+                rsi_val = self._rsi(data15[:, 4])
+        except Exception:
+            pass  # Fallback: 1m-RSI
 
         # ─── Stufe 1: STOP-LOSS (absolut erste Priorität) ──────────
 
