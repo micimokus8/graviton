@@ -320,6 +320,33 @@ class EntryEngine:
         current_ema = float(ema_raw[-1])
         current_price = float(closes[-1])
 
+        # ─── LONG Overextension-Gate ─────────────────────────────
+        # Empirie (40 Trades, Sep-Okt 2026): LONG-Entries >3% über
+        # EMA20(1h): 13 Trades, netto -7.5% — der klassische "Peak
+        # weggekauft"-Fall (QNT 26.10.: +10.7% über EMA → SL -2.47%).
+        # LONG nahe EMA20(1h): WR 62%. Gate blockiert nur LONG;
+        # SHORT-Bewertung unangetastet. Threshold konfigurierbar.
+        if bias == "LONG":
+            gate = float(CFG.entry.get("overextension_max_long", 6.0))
+            try:
+                oh1h = self._fetch_1m(symbol, limit=30, tf="1h")
+                if oh1h is not None and len(oh1h) >= 21:
+                    ema1h = float(self._calc_ema(oh1h[:, 4], 20)[-1])
+                    dist_1h = (current_price - ema1h) / ema1h * 100
+                    if dist_1h > gate:
+                        return EntrySignal(
+                            symbol=symbol, bias=bias, state=EntryState.NO_ENTRY,
+                            price=round(current_price, 6), ema20=round(ema1h, 6),
+                            distance_pct=round(dist_1h, 4),
+                            rejection=False, rejection_high=0, rejection_low=0,
+                            rejection_close=0, entry_price=0, stop_loss=0,
+                            step=current_step,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            reasoning=f"Overextension-Gate: +{dist_1h:.1f}% über EMA20(1h) (> {gate:.0f}%) — überhitzt, kein LONG",
+                        )
+            except Exception:
+                pass  # Gate-Daten nicht ladbar → Gate offen (kein Hard-Fail)
+
         # Distanz zur EMA
         distance_pct = abs(current_price - current_ema) / current_ema * 100
 

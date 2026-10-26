@@ -80,6 +80,7 @@ ENTRY = {
     "ema_period":         20,
     "ema_smoothing":      9,
     "ema_distance_max":   0.50,    # Basis-Distanz; wird dynamisch via 24h-Change skaliert
+    "overextension_max_long": 6.0,  # LONG-Block wenn Preis > +6% über EMA20(1h) — Parabel-Schutz
     "sl_offset_pct":      0.90,    # Mindest-SL; effektiver SL = min(max(1.0× 1H-ATR, 0.9%), Cap)
     "sl_cap_pct":         5.0,     # Maximal-SL; 5% gibt Krypto-Intraday genug Luft (vorher 2.5% zu eng)
     "max_stair_steps":    1,       # Start: nur erster Pullback
