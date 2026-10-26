@@ -38,7 +38,7 @@ def _env_float(key: str, default: float = 0.0) -> float:
 
 # ─── Mode ──────────────────────────────────────────────────────────
 
-DRY_RUN = False  # False = LIVE-Trading (am 27.09.2026 freigeschaltet, halbe Größe 8.75%)
+DRY_RUN = True  # DRY_RUN aktiviert 25.10 auf User-Wunsch (Live-Pause)
 
 SESSIONS = {
     "ny":   {"scan": "12:00", "open": "12:30", "close": "16:00"},
