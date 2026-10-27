@@ -41,7 +41,7 @@ def _env_float(key: str, default: float = 0.0) -> float:
 DRY_RUN = True  # DRY_RUN aktiviert 25.10 auf User-Wunsch (Live-Pause)
 
 SESSIONS = {
-    "ny":   {"scan": "12:00", "open": "12:30", "close": "17:00"},
+    "ny":   {"scan": "13:00", "open": "13:30", "close": "17:00"},
     "asia": {"scan": "23:30", "open": "00:00", "close": "02:00"},
 }
 
