@@ -835,8 +835,10 @@ def _run_session(session_key: str):
     print(f"[{_ts_str()}] Watcher aktiv — überwache {base} {bias}...")
 
     if DRY_RUN:
-        # DRY RUN: simulierter 2-Stufen-Exit (Profit Lock bei +1%, dann Break-Even)
-        print(f"   DRY RUN: 2-Stufen-Exit simuliert — 50% bei +1%, Rest Break-Even + Trailing {EXIT['trailing_pct']}%")
+        # DRY RUN: simulierter 2-Stufen-Exit — identische Werte wie LIVE
+        # (Profit-Lock EXIT['profit_lock_pct'], Trailing EXIT['trailing_pct'],
+        #  Entry-SL unverändert. Kein Break-Even mehr — Trailing startet am Lock.)
+        print(f"   DRY RUN: 2-Stufen-Exit simuliert — 50% bei +{EXIT['profit_lock_pct']}% (Profit-Lock), Rest Trailing {EXIT['trailing_pct']}% ab Lock")
         print(f"   Nächste Session: ~{close_dt.strftime('%H:%M')} UTC (Session-Ende)")
         last_pnl_msg = 0
         best_pnl = 0.0
