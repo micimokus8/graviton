@@ -36,7 +36,11 @@ TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
 DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
 WATCHLIST_MAX_AGE_SECONDS = 45 * 60
 BIAS_MAX_AGE_SECONDS = 15 * 60
-ENTRY_WINDOW_SECONDS = 30 * 60
+# Entry-Fenster: harte Obergrenze gegen veraltete Bias-Snapshots.
+# Messung 27.10.: Bias 12:46 UTC -> Entry 12:50 UTC = 4 Min (nicht 20 —
+# die KI hatte Scan->Entry gemessen). 15 Min = 1 Bias-Bar Cap, laesst aber
+# genug Polling-Zeit nach dem 5-Min-Cron-Versatz (Bias 14:45, Session 14:50).
+ENTRY_WINDOW_SECONDS = 15 * 60
 MARKET_SENTIMENT_FILE = DATA_DIR / "market_sentiment.json"
 MARKET_SENTIMENT_MAX_AGE_SECONDS = 6 * 60 * 60  # eine Session lang gültig (log-only Kontext)
 
@@ -325,6 +329,8 @@ def _log_trade(event: str, **kwargs):
     if event == "exit" and _entry_meta:
         entry.setdefault("signal_count", _entry_meta.get("signal_count"))
         entry.setdefault("dist_pct", _entry_meta.get("dist_pct"))
+        entry.setdefault("regime", _entry_meta.get("regime") or {})
+        entry.setdefault("entry_vol_ratio", _entry_meta.get("vol_ratio"))
     with open(TRADE_LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
@@ -764,13 +770,16 @@ def _run_session(session_key: str):
                 _entry_meta = {
                     "signal_count": int(cand.get("signal_count", 0) or 0),
                     "dist_pct": round(float(signal.distance_pct), 4),
+                    "regime": cand.get("regime") or {},
+                    "vol_ratio": round(float(vol_ratio), 2),
                 }
                 _log_trade("entry", symbol=symbol, base=base, bias=bias,
                            price=entry_price, ema20=signal.ema20,
                            stop_loss=stop_loss, mode=mode, session=name,
                            vol_ratio=round(vol_ratio, 2),
                            signal_count=_entry_meta["signal_count"],
-                           dist_pct=_entry_meta["dist_pct"])
+                           dist_pct=_entry_meta["dist_pct"],
+                           regime=_entry_meta["regime"])
                 # Konto-Stand vor dem Trade + Entry-Zeitmarke (für echte Fills).
                 account_before = _account_str(trader) if (trader is not None and not DRY_RUN) else None
                 entry_ts_ms = _now_ts()
@@ -926,7 +935,8 @@ def _run_session(session_key: str):
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,
                                    reason="profit_lock", close_pct=50,
                                    pnl_pct=round(lock_pnl, 2), price=fill_price,
-                                   rsi=0, session=name)
+                                   rsi=0, session=name,
+                                   mfe_pct=round(best_pnl, 2))
 
                     elif event:
                         reason_label, fill_price = event
@@ -947,7 +957,8 @@ def _run_session(session_key: str):
                         _log_trade("exit", symbol=symbol, base=base, bias=bias,
                                    reason=reason_label, close_pct=rest_pct,
                                    pnl_pct=round(rest_pnl, 2), price=fill_price,
-                                   rsi=0, session=name)
+                                   rsi=0, session=name,
+                                   mfe_pct=round(best_pnl, 2))
                         entered = False
                         break
             except Exception as exc:
@@ -983,7 +994,8 @@ def _run_session(session_key: str):
             print(exit_msg); tg(exit_msg)
             _log_trade("exit", symbol=symbol, base=base, bias=bias,
                        reason="session_end", close_pct=rest_pct, pnl_pct=round(pnl, 2),
-                       price=exit_price_actual, rsi=0, session=name)
+                       price=exit_price_actual, rsi=0, session=name,
+                       mfe_pct=round(best_pnl, 2))
             entered = False
     else:
         # LIVE: echter Watcher mit Exit-Engine

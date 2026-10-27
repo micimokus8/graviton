@@ -34,6 +34,7 @@ import time
 from candle_utils import closed_ohlcv
 from volume_metrics import _session_volume_ratio
 from feature_snapshot import build_timeframe_features, relative_strength
+from regime import directional, atr_pct as regime_atr_pct, volatility_expansion, classify_regime
 
 
 # ─── BiasResult ──────────────────────────────────────────────────────
@@ -52,6 +53,7 @@ class BiasResult:
     signal_count: int = 0  # 3 = 3/3, 2 = 2/3, 0 = NOISE
     reason: str = ""
     features: dict = field(default_factory=dict)
+    regime: dict = field(default_factory=dict)
 
 
 # ─── BiasAnalyzer ────────────────────────────────────────────────────
@@ -149,14 +151,26 @@ class BiasAnalyzer:
             signal = "NEUTRAL"
             detail = "weder bullisch noch bärisch"
 
+        # ── Regime-Metriken (ADX/DI/ATR) für jeden Frame ────────
+        # ADX hat keine Richtung: +DI/-DI werden immer mitgeliefert,
+        # damit Aufwärts- und Abwärtstrend unterscheidbar bleiben.
+        dir_stats = directional(data)
+        regime_meta = {
+            "adx": dir_stats["adx"],
+            "plus_di": dir_stats["plus_di"],
+            "minus_di": dir_stats["minus_di"],
+            "atr_pct": regime_atr_pct(data),
+            "expansion": volatility_expansion(data),
+        }
+
         # ── 4H Trend-Frische-Check ──────────────────────────────
         # Erschöpfte Trends (≥16h alt, Umkehrsignale) zählen nicht
         if timeframe == "4h" and signal in ("BULLISH", "BEARISH"):
             exhausted, ex_reason = self._check_4h_exhaustion(data)
             if exhausted:
-                return {"signal": "NEUTRAL", "detail": f"{signal} → STALE ({ex_reason})"}
+                return {"signal": "NEUTRAL", "detail": f"{signal} → STALE ({ex_reason})", **regime_meta}
 
-        return {"signal": signal, "detail": detail}
+        return {"signal": signal, "detail": detail, **regime_meta}
 
     def _check_4h_exhaustion(self, data: np.ndarray) -> tuple[bool, str]:
         """
@@ -347,6 +361,77 @@ class BiasAnalyzer:
 
         signal_count = max(bullish, bearish)  # 3 = 3/3, 2 = 2/3
 
+        # ── Regime-Gate (ADX 1H + Richtung) ──────────────────────
+        # ADX ohne Richtung ist wertlos: classify_regime() prueft +DI/-DI
+        # gegen den Trade-Bias. Veto bei starkem Gegentrend (ADX>=25) und
+        # bei trendlosem Markt (ADX<20) — beides empirisch die schlechtesten
+        # Kategorien (41 Trades: ADX<20 avg -1.27%/Trade).
+        regime_cfg = self._cfg.regime if hasattr(self._cfg, "regime") else {}
+        regime_enabled = bool(regime_cfg.get("enabled", True))
+        regime_log_only = bool(regime_cfg.get("log_only", False))
+        role_mode = bool(regime_cfg.get("role_mode", True))
+
+        if role_mode:
+            # ── Rollen-Trennung: 4H = Veto, 1H = Bias, 15m = Trigger ──
+            # 1H muss gerichtet sein (NEUTRAL = kein Trade). 4H stimmt nicht
+            # mehr mit ab, sondern kann nur blocken — und nur dann, wenn er
+            # einen echten Gegentrend mit ADX >= four_h_veto_adx zeigt.
+            h1_sig = tf_1h["signal"]
+            base_bias = "LONG" if h1_sig == "BULLISH" else "SHORT" if h1_sig == "BEARISH" else "NOISE"
+            if base_bias == "NOISE":
+                return BiasResult(
+                    symbol=symbol, bias="NOISE",
+                    session_open_price=session_open_price,
+                    current_price=current_price,
+                    session_chg_pct=session_chg_pct,
+                    session_vol_ratio=session_vol_ratio,
+                    candles_analyzed=n,
+                    green_candles=green, red_candles=red,
+                    signal_count=0,
+                    reason=f"NOISE (Role-Mode: 1H {h1_sig} — kein gerichteter Bias) {tf_detail} | {chg_note}{vol_note}",
+                    regime={"regime": "ROLE_1H_NEUTRAL", "veto": True},
+                )
+            four_h_veto = bool(regime_cfg.get("four_h_veto", True))
+            if four_h_veto and tf_4h["signal"] in ("BULLISH", "BEARISH") and tf_4h["signal"] != h1_sig:
+                adx4 = float(tf_4h.get("adx") or 0.0)
+                if adx4 >= float(regime_cfg.get("four_h_veto_adx", 25.0)):
+                    return BiasResult(
+                        symbol=symbol, bias="NOISE",
+                        session_open_price=session_open_price,
+                        current_price=current_price,
+                        session_chg_pct=session_chg_pct,
+                        session_vol_ratio=session_vol_ratio,
+                        candles_analyzed=n,
+                        green_candles=green, red_candles=red,
+                        signal_count=signal_count,
+                        reason=(f"NOISE (4H-Veto: {tf_4h['signal']} ADX {adx4:.1f} gegen "
+                                f"1H {h1_sig}) {tf_detail} | {chg_note}{vol_note}"),
+                        regime={"regime": "VETO_4H", "adx": adx4, "veto": True},
+                    )
+        else:
+            base_bias = "LONG" if bullish >= 2 else "SHORT" if bearish >= 2 else "NOISE"
+
+        regime_info = {}
+        if base_bias != "NOISE":
+            regime_info = classify_regime(
+                tf_1h, base_bias,
+                trend_threshold=float(regime_cfg.get("trend_threshold", 25.0)),
+                chop_threshold=float(regime_cfg.get("chop_threshold", 20.0)),
+            )
+            if regime_info.get("veto") and regime_enabled and not regime_log_only:
+                return BiasResult(
+                    symbol=symbol, bias="NOISE",
+                    session_open_price=session_open_price,
+                    current_price=current_price,
+                    session_chg_pct=session_chg_pct,
+                    session_vol_ratio=session_vol_ratio,
+                    candles_analyzed=n,
+                    green_candles=green, red_candles=red,
+                    signal_count=signal_count,
+                    reason=f"NOISE (Regime-Veto: {regime_info['reason']}) {tf_detail} | {chg_note}{vol_note}",
+                    regime=regime_info,
+                )
+
         # ── Volumen-Filter: Session muss mind. so aktiv sein wie normal ──
         # Verhindert Drift-Trades auf toten Coins (Vol 0.0x–0.1x)
         # ONDO/BCH/ADA hatten alle Vol 0.0x und kamen nie über +1%
@@ -365,8 +450,21 @@ class BiasAnalyzer:
                 reason=f"NOISE (Vol {session_vol_ratio:.2f}x < {MIN_SESSION_VOL_RATIO:.1f}x) — keine Session-Aktivität | {tf_detail}"
             )
 
-        # ── 2-von-3 Regel ────────────────────────────────────────
-        if bullish >= 2:
+        # ── Ergebnis: Role-Mode (1H gerichtet) ODER 2/3-Vote ─────
+        # Im Role-Mode bestimmt 1H die Richtung; 15m liefert nur noch
+        # Bestaetigung (Trigger liegt ohnehin im 5m-Pullback). signal_count
+        # wird so kodiert, dass das Ranking in session.py weiter funktioniert:
+        #   3 = 1H + 15m gleichgerichtet  (volles Role-Setup)
+        #   2 = 1H gerichtet, 15m neutral/gegenlaeufig
+        if role_mode:
+            signal_count = 3 if tf_15m["signal"] == h1_sig else 2
+            long_reason = f"LONG (Role: 1H {h1_sig}, 15m {tf_15m['signal']}) {tf_detail} | {chg_note}{vol_note}"
+            short_reason = f"SHORT (Role: 1H {h1_sig}, 15m {tf_15m['signal']}) {tf_detail} | {chg_note}{vol_note}"
+        else:
+            long_reason = f"LONG ({bullish}/3) {tf_detail} | {chg_note}{vol_note}"
+            short_reason = f"SHORT ({bearish}/3) {tf_detail} | {chg_note}{vol_note}"
+
+        if base_bias == "LONG":
             return BiasResult(
                 symbol=symbol, bias="LONG",
                 session_open_price=session_open_price,
@@ -376,10 +474,11 @@ class BiasAnalyzer:
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
                 signal_count=signal_count,
-                reason=f"LONG ({bullish}/3) {tf_detail} | {chg_note}{vol_note}"
+                reason=long_reason,
+                regime=regime_info,
             )
 
-        if bearish >= 2:
+        if base_bias == "SHORT":
             return BiasResult(
                 symbol=symbol, bias="SHORT",
                 session_open_price=session_open_price,
@@ -389,7 +488,8 @@ class BiasAnalyzer:
                 candles_analyzed=n,
                 green_candles=green, red_candles=red,
                 signal_count=signal_count,
-                reason=f"SHORT ({bearish}/3) {tf_detail} | {chg_note}{vol_note}"
+                reason=short_reason,
+                regime=regime_info,
             )
 
         # Kein Konsens: NOISE

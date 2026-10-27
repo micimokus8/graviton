@@ -85,6 +85,27 @@ ENTRY = {
     "sl_cap_pct":         5.0,     # Maximal-SL; 5% gibt Krypto-Intraday genug Luft (vorher 2.5% zu eng)
     "max_stair_steps":    1,       # Start: nur erster Pullback
     "max_parallel_coins": 1,
+    # Rejection-Kerze muss echte Beteiligung zeigen (Volumen vs 20-Bar-Median).
+    # DASH 27.10.: Signal-Bar 1.50x, Entry-Bar real 0.44x — Volumen wurde
+    # bisher nur im Scan/Bias geprueft. 0 = Filter aus.
+    "rejection_min_vol_ratio": 1.0,
+    # Entry-Bar darf nicht am Extrem schliessen (LONG: untere Haelfte = Absturz).
+    "entry_bar_min_close_pos": 0.35,   # <35% = Absturzbar (am Tief geschlossen)
+}
+
+# ─── Regime-Gate (ADX 1H + Richtung) ────────────────────────────────
+# Empirie 41 Trades: ADX<20 avg -1.27%/Trade, ADX>=25 avg +0.29%/Trade.
+# ADX hat KEINE Richtung — classify_regime() prueft +DI/-DI gegen den Bias.
+REGIME = {
+    "enabled":            True,   # Gate aktiv (bias.py → NOISE bei Veto)
+    "trend_threshold":    25.0,   # ADX >= 25 = starker Trend
+    "chop_threshold":     20.0,   # ADX < 20 = trendlos, kein Trendfolge-Entry
+    "log_only":           False,  # True = nur loggen, nicht blocken (Shadow-Modus)
+    # Rollen statt Stimmen (KI-Empfehlung): 4H = Veto, 1H = Bias, 15m = Trigger.
+    # False = alte 2-von-3-Demokratie (Fallback / A-B-Test).
+    "role_mode":          True,
+    "four_h_veto":        True,
+    "four_h_veto_adx":    25.0,   # 4H-Gegentrend zaehlt nur als Veto ab ADX 25
 }
 
 # ─── S/R Kontext ───────────────────────────────────────────────────
@@ -141,6 +162,7 @@ class Config:
     scan: dict = field(default_factory=lambda: dict(SCAN))
     bias: dict = field(default_factory=lambda: dict(BIAS))
     entry: dict = field(default_factory=lambda: dict(ENTRY))
+    regime: dict = field(default_factory=lambda: dict(REGIME))
     sr: dict = field(default_factory=lambda: dict(SR))
     position: dict = field(default_factory=lambda: dict(POSITION))
     exit: dict = field(default_factory=lambda: dict(EXIT))

@@ -55,6 +55,41 @@ class EntryPullbackTests(unittest.TestCase):
         self.assertIn("1 Kerze(n) zurück", signal.reasoning)
         self.assertAlmostEqual(signal.entry_price, 99.82)
 
+    def test_dash_crash_entry_bar_is_not_entered(self):
+        # DASH 27.10.: gueltige Rejection 2 Bars zurueck, aber der Entry-Bar
+        # schloss auf 0% seiner Range (55.36 -> 55.14) — klassischer Absturz.
+        # Der neue Geometrie-Filter muss den Entry verweigern.
+        candles = []
+        for i in range(30):
+            candles.append([i * 300_000, 55.00, 55.04, 54.98, 55.00, 100.0])
+        candles[-3] = [27 * 300_000, 54.95, 55.10, 54.94, 55.06, 150.0]  # Rejection
+        candles[-2] = [28 * 300_000, 55.06, 55.08, 55.02, 55.05, 90.0]
+        candles[-1] = [29 * 300_000, 55.06, 55.06, 54.90, 54.90, 60.0]   # Absturz, Close=Tief
+
+        engine = EntryEngine()
+        engine._exchange = _PullbackExchange(candles)
+        engine._calc_sl_pct = lambda symbol, price: 1.41
+
+        signal = engine.check_entry("DASH/USD:USD", "LONG")
+
+        self.assertNotEqual(signal.state, EntryState.ENTERED)
+        self.assertIn("AT_EMA", signal.state.name)
+
+    def test_rejection_without_volume_is_not_entered(self):
+        # Signal-Bar mit 0.4x Median-Volumen: keine Beteiligung = keine Rejection.
+        candles = []
+        for i in range(30):
+            candles.append([i * 300_000, 99.8, 99.9, 99.7, 99.8, 100.0])
+        candles[-1] = [29 * 300_000, 99.60, 99.80, 99.55, 99.70, 40.0]
+
+        engine = EntryEngine()
+        engine._exchange = _PullbackExchange(candles)
+        engine._calc_sl_pct = lambda symbol, price: 0.6
+
+        signal = engine.check_entry("ENA/USD:USD", "LONG")
+
+        self.assertNotEqual(signal.state, EntryState.ENTERED)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -409,12 +409,42 @@ class EntryEngine:
                 ):
                     continue
 
-                # Volumen gehört ausschließlich in Scan/Bias. Der Entry
-                # entscheidet hier nur noch: gab es kürzlich einen
-                # bestätigten EMA-Pullback und ist der aktuelle Preis noch
-                # nahe genug an EMA20?
+                # Volumen-Confirmation auf GENAU dieser Rejection-Kerze.
+                # Vorher wurde Volumen nur im Scan/Bias geprüft — das
+                # Signal-Bar (1.50x) wurde mit dem Entry-Bar verwechselt,
+                # der real nur 0.44x hatte (DASH 27.10.). Eine Rejection
+                # ohne Beteiligung ist keine Rejection.
+                min_vol = float(cfg.get("rejection_min_vol_ratio", 1.0))
+                vol_ratio = 0.0
+                try:
+                    hist = volumes[max(0, idx - 20):idx]
+                    med = float(np.median(hist)) if len(hist) else 0.0
+                    vol_ratio = float(volumes[idx] / med) if med > 0 else 0.0
+                except Exception:
+                    vol_ratio = 0.0
+                if min_vol > 0 and vol_ratio < min_vol:
+                    continue
+
+                # Distanz-Check (nach Volumen, damit Logs den echten Grund zeigen)
                 if distance_pct > max_dist:
                     continue
+
+                # ── Entry-Bar-Geometrie (der eigentliche KI-Fix) ─────
+                # Die Rejection darf 2 Bars zurückliegen — aber der Bar, zu
+                # dessen Close wir einsteigen, darf kein Absturzbar sein.
+                # DASH 27.10.: Rejection 2 Bars zurück akzeptiert, Entry-Bar
+                # schloss auf 0% der Range (55.36 → 55.14) → Long ins fallende
+                # Messer. Regel: LONG nur, wenn der Entry-Bar in der oberen
+                # Hälfte schließt; SHORT spiegelbildlich.
+                last_bar = data_5m[-1]
+                rng_last = float(last_bar[2]) - float(last_bar[3])
+                if rng_last > 0:
+                    pos_last = (float(last_bar[4]) - float(last_bar[3])) / rng_last
+                    min_pos = float(cfg.get("entry_bar_min_close_pos", 0.35))
+                    if bias == "LONG" and pos_last < min_pos:
+                        continue
+                    if bias == "SHORT" and pos_last > (1.0 - min_pos):
+                        continue
 
                 # Nicht zum alten Kerzenschluss kaufen: Die Rejection ist
                 # nur der Trigger, ausgeführt wird zum aktuellen Marktpreis.
@@ -428,7 +458,7 @@ class EntryEngine:
                 age = len(data_5m) - 1 - idx
                 signal.reasoning = (
                     f"Pullback: 5m Rejection an EMA ({distance_pct:.2f}%, "
-                    f"{age} Kerze(n) zurück)"
+                    f"{age} Kerze(n) zurück, Vol {vol_ratio:.2f}x)"
                 )
                 return signal
         except Exception:
