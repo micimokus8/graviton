@@ -418,7 +418,14 @@ class BiasAnalyzer:
                 trend_threshold=float(regime_cfg.get("trend_threshold", 25.0)),
                 chop_threshold=float(regime_cfg.get("chop_threshold", 20.0)),
             )
-            if regime_info.get("veto") and regime_enabled and not regime_log_only:
+            # CHOP blockt nur, wenn ausdruecklich aktiviert. Default ist
+            # log-only: n=4 Trades, und der Edge lebt mechanisch eher im
+            # Niedrig-ADX-Bereich (flache Pullbacks, kontrahierte Vola).
+            chop_gate = bool(regime_cfg.get("chop_gate_enabled", False))
+            block = regime_info.get("veto") and regime_enabled and not regime_log_only
+            if block and regime_info.get("regime") == "CHOP" and not chop_gate:
+                block = False
+            if block:
                 return BiasResult(
                     symbol=symbol, bias="NOISE",
                     session_open_price=session_open_price,

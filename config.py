@@ -106,7 +106,27 @@ REGIME = {
     "role_mode":          True,
     "four_h_veto":        True,
     "four_h_veto_adx":    25.0,   # 4H-Gegentrend zaehlt nur als Veto ab ADX 25
+    # ADX<20 als Eintritts-Block ist NICHT belegt (n=4) und mechanisch
+    # fragwuerdig: der Edge lebt in flachen Pullbacks/kontrahierter Vola,
+    # also eher NIEDRIGEM ADX. Default: nur loggen, nicht blocken.
+    "chop_gate_enabled":  False,
 }
+
+
+def profit_lock_pct_for(entry_price: float, stop_loss: float,
+                        cfg: dict | None = None) -> float:
+    """Ziel-Prozent fuer den 50%-Profit-Lock: target_rr x SL-Distanz.
+
+    Fixe 2% waren bei 1.41% SL nur 1.4R. Hier wird das Ziel an den
+    tatsaechlichen Stop gekoppelt (Mindest-R), mit Untergrenze und Cap.
+    """
+    exit_cfg = EXIT if cfg is None else cfg
+    if not entry_price:
+        return float(exit_cfg["profit_lock_pct"])
+    sl_pct = abs(entry_price - stop_loss) / entry_price * 100
+    target = max(sl_pct * float(exit_cfg.get("target_rr", 2.0)),
+                 float(exit_cfg["profit_lock_pct"]))
+    return min(target, float(exit_cfg.get("target_max_pct", 10.0)))
 
 # ─── S/R Kontext ───────────────────────────────────────────────────
 
@@ -132,7 +152,13 @@ _position_size_usd = EQUITY_USD * (POSITION["account_risk_pct_per_coin"] / 100)
 EXIT = {
     "ema_overextended_pct":  2.50,    # Preis > 2.5% von EMA → struktureller Exit (inaktiv, siehe structural_exits)
     "trailing_pct":          0.50,    # Trailing Stop Abstand für die Rest-Hälfte
-    "profit_lock_pct":        2.0,    # 50% sichern, danach Rest trailing (2% bei 5% SL → 1:2.5 R:R)
+    # Ziel = R-Vielfaches des tatsaechlichen SL, nicht fixe Prozent.
+    # Fixe 2% bei 1.41% SL waren nur 1.4R (KI-Befund). target_rr=2.0 setzt
+    # das Ziel bei 2x SL; profit_lock_pct bleibt Untergrenze, target_max_pct
+    # deckelt breite Stops (SL-Cap 5% -> sonst 10%+ Ziel, das nie laeuft).
+    "profit_lock_pct":        2.0,    # Untergrenze fuer das 50%-Lock
+    "target_rr":              2.0,    # Mindest-R:R (Ziel = 2.0 x SL-Distanz)
+    "target_max_pct":        10.0,    # Cap fuer das Ziel in Prozent
     "pattern_exit_50":       False,   # Pattern aus — Live = DRY RUN (1m-Umkehr vs 5m-Pullback-Konflikt)
     "structural_exits":      False,   # EMA/RSI/S/R aus — Live = DRY RUN (nur SL + Profit-Lock + Trailing)
     "rsi_extreme_long":      78,

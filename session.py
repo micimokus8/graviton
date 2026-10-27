@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import SESSIONS, DRY_RUN, EXIT
+from config import SESSIONS, DRY_RUN, EXIT, profit_lock_pct_for
 from entry import EntryEngine, EntryState
 from exit import ExitEngine, ExitReason
 from sr_levels import check_sr_for_entry
@@ -411,6 +411,7 @@ def _resolve_dry_run_candle(
     candle_open: float,
     candle_high: float,
     candle_low: float,
+    profit_lock_pct: float | None = None,
 ) -> tuple[str, float] | None:
     """Resolve one closed candle without using its close as an execution fill.
 
@@ -419,13 +420,14 @@ def _resolve_dry_run_candle(
     and deterministic). Once half the position is closed, only the active stop
     is relevant.
     """
+    lock_pct = EXIT["profit_lock_pct"] if profit_lock_pct is None else profit_lock_pct
     if bias == "LONG":
         stop_hit = candle_low <= active_stop
-        target_price = entry_price * (1 + EXIT["profit_lock_pct"] / 100)
+        target_price = entry_price * (1 + lock_pct / 100)
         target_hit = candle_high >= target_price
     else:
         stop_hit = candle_high >= active_stop
-        target_price = entry_price * (1 - EXIT["profit_lock_pct"] / 100)
+        target_price = entry_price * (1 - lock_pct / 100)
         target_hit = candle_low <= target_price
 
     if not half_closed and stop_hit:
@@ -578,6 +580,7 @@ def _run_session(session_key: str):
         print(msg); tg(msg)
         return
 
+    bias_written_ts = bias_file.stat().st_mtime
     entry_deadline = _entry_deadline(bias_file, close_dt)
     print(
         f"⏱ [{name}] Entry-Fenster bis {entry_deadline.strftime('%H:%M UTC')} "
@@ -765,6 +768,10 @@ def _run_session(session_key: str):
                         })
                         return
 
+                # Ziel aus echtem SL ableiten: 2R statt fixer 2%.
+                lock_pct = profit_lock_pct_for(entry_price, stop_loss)
+                sl_pct_actual = abs(entry_price - stop_loss) / entry_price * 100
+
                 # Erst nach bestätigtem DRY_RUN-Entry bzw. geschütztem LIVE-Fill loggen.
                 global _entry_meta
                 _entry_meta = {
@@ -772,6 +779,13 @@ def _run_session(session_key: str):
                     "dist_pct": round(float(signal.distance_pct), 4),
                     "regime": cand.get("regime") or {},
                     "vol_ratio": round(float(vol_ratio), 2),
+                    "sl_pct": round(sl_pct_actual, 2),
+                    "target_pct": round(lock_pct, 2),
+                    "rr": round(lock_pct / sl_pct_actual, 2) if sl_pct_actual else None,
+                    "bias_age_sec": round(time.time() - bias_written_ts),
+                    "bar_close_pos": getattr(signal, "bar_close_pos", None),
+                    "atr_pct": getattr(signal, "atr_pct", None),
+                    "atr_ratio": getattr(signal, "atr_ratio", None),
                 }
                 _log_trade("entry", symbol=symbol, base=base, bias=bias,
                            price=entry_price, ema20=signal.ema20,
@@ -779,7 +793,14 @@ def _run_session(session_key: str):
                            vol_ratio=round(vol_ratio, 2),
                            signal_count=_entry_meta["signal_count"],
                            dist_pct=_entry_meta["dist_pct"],
-                           regime=_entry_meta["regime"])
+                           regime=_entry_meta["regime"],
+                           sl_pct=_entry_meta["sl_pct"],
+                           target_pct=_entry_meta["target_pct"],
+                           rr=_entry_meta["rr"],
+                           bias_age_sec=_entry_meta["bias_age_sec"],
+                           bar_close_pos=_entry_meta["bar_close_pos"],
+                           atr_pct=_entry_meta["atr_pct"],
+                           atr_ratio=_entry_meta["atr_ratio"])
                 # Konto-Stand vor dem Trade + Entry-Zeitmarke (für echte Fills).
                 account_before = _account_str(trader) if (trader is not None and not DRY_RUN) else None
                 entry_ts_ms = _now_ts()
@@ -790,7 +811,8 @@ def _run_session(session_key: str):
                     f"   EMA20:  {signal.ema20:.8f}\n"
                     f"   Dist:   {signal.distance_pct:.2f}%\n"
                     f"   Vol:    {vol_ratio:.2f}x\n"
-                    f"   SL:     {stop_loss:.8f}\n"
+                    f"   SL:     {stop_loss:.8f}  ({_entry_meta['sl_pct']:.2f}%)\n"
+                    f"   Ziel:   {lock_pct:.2f}%  ({_entry_meta['rr']}R) → 50% sichern\n"
                     f"   Grund:  {signal.reasoning}"
                     f"{entry_account_line}"
                 )
@@ -847,7 +869,7 @@ def _run_session(session_key: str):
         # DRY RUN: simulierter 2-Stufen-Exit — identische Werte wie LIVE
         # (Profit-Lock EXIT['profit_lock_pct'], Trailing EXIT['trailing_pct'],
         #  Entry-SL unverändert. Kein Break-Even mehr — Trailing startet am Lock.)
-        print(f"   DRY RUN: 2-Stufen-Exit simuliert — 50% bei +{EXIT['profit_lock_pct']}% (Profit-Lock), Rest Trailing {EXIT['trailing_pct']}% ab Lock")
+        print(f"   DRY RUN: 2-Stufen-Exit simuliert — 50% bei +{lock_pct:.2f}% (2R-Lock), Rest Trailing {EXIT['trailing_pct']}% ab Lock")
         print(f"   Nächste Session: ~{close_dt.strftime('%H:%M')} UTC (Session-Ende)")
         last_pnl_msg = 0
         best_pnl = 0.0
@@ -891,6 +913,7 @@ def _run_session(session_key: str):
                             candle_open=candle_open,
                             candle_high=candle_high,
                             candle_low=candle_low,
+                            profit_lock_pct=lock_pct,
                         )
                         # Trailing für Rest-Hälfte ab Profit-Lock (der Live-Zweig
                         # macht das längst — die Sim hat es nie nachgebaut). Stop
@@ -929,6 +952,7 @@ def _run_session(session_key: str):
                             f"   Entry:  ${entry_price:.8f}\n"
                             f"   Exit:   ${fill_price:.8f}\n"
                             f"   PnL:    🟢 {lock_pnl:+.2f}%\n"
+                            f"   Ziel:   {lock_pct:.2f}% ({_entry_meta['rr']}R) erreicht\n"
                             f"   Info:   50% gesichert, Rest → Trailing ab Lock-Preis ({EXIT['trailing_pct']}%)"
                         )
                         print(lock_msg); tg(lock_msg)
@@ -1008,6 +1032,7 @@ def _run_session(session_key: str):
             steps=1, trailing_active=False, trailing_price=stop_loss,
             entry_time=datetime.now(timezone.utc).isoformat(),
             pattern_exit_done=False,
+            profit_lock_pct=lock_pct,
         )
         watcher.add_position(tracked)
 

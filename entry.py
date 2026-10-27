@@ -33,6 +33,7 @@ from enum import Enum
 
 from config import CFG
 from candle_utils import closed_ohlcv
+from regime import atr_pct as regime_atr_pct, volatility_expansion
 
 
 class EntryState(Enum):
@@ -62,6 +63,11 @@ class EntrySignal:
     step: int                    # Treppenstufe (1-4)
     timestamp: str
     reasoning: str = ""          # Entry-Grund (Pullback / Breakout)
+    # Kontinuierliche Entry-Features fuer die spaetere Bucket-Auswertung.
+    # Die KI-Kritik war klar: nicht raten, sondern als Variable loggen.
+    bar_close_pos: float = 0.0   # Close-Position im Entry-Bar (0=Tief, 1=Hoch)
+    atr_pct: float = 0.0         # ATR(5m) in % des Preises
+    atr_ratio: float = 0.0       # ATR(5m) / Median der letzten 20 Bars
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -438,6 +444,7 @@ class EntryEngine:
                 # Hälfte schließt; SHORT spiegelbildlich.
                 last_bar = data_5m[-1]
                 rng_last = float(last_bar[2]) - float(last_bar[3])
+                pos_last = 0.5
                 if rng_last > 0:
                     pos_last = (float(last_bar[4]) - float(last_bar[3])) / rng_last
                     min_pos = float(cfg.get("entry_bar_min_close_pos", 0.35))
@@ -449,6 +456,12 @@ class EntryEngine:
                 # Nicht zum alten Kerzenschluss kaufen: Die Rejection ist
                 # nur der Trigger, ausgeführt wird zum aktuellen Marktpreis.
                 signal.entry_price = current_price
+                signal.bar_close_pos = round(float(pos_last), 3)
+                try:
+                    signal.atr_pct = round(float(regime_atr_pct(data_5m)), 3)
+                    signal.atr_ratio = round(float(volatility_expansion(data_5m)), 2)
+                except Exception:
+                    pass
                 sl_pct = self._calc_sl_pct(symbol, signal.entry_price)
                 if bias == "LONG":
                     signal.stop_loss = round(signal.entry_price * (1 - sl_pct / 100), 8)

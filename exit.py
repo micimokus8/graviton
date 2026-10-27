@@ -92,7 +92,8 @@ class ExitEngine:
 
     def check(self, symbol: str, side: str, entry_price: float,
               stop_loss: float, current_step: int,
-              trailing_active: bool = False, trailing_price: float = 0.0) -> ExitSignal:
+              trailing_active: bool = False, trailing_price: float = 0.0,
+              profit_lock_pct: float | None = None) -> ExitSignal:
         """
         Prüft Exit-Signale. trailing_active/trailing_price werden nur für
         Kompatibilität mit Watcher.poll() entgegengenommen — der eigentliche
@@ -166,7 +167,8 @@ class ExitEngine:
         # ─── Stufe 3: Strukturell (100%) ───────────────────────
 
         # B0.5: Soft Profit Lock — +1.05% ohne Pattern → 50% sichern + Trailing
-        if pnl_pct >= cfg_exit["profit_lock_pct"] and not trailing_active:
+        lock_pct = cfg_exit["profit_lock_pct"] if profit_lock_pct is None else profit_lock_pct
+        if pnl_pct >= lock_pct and not trailing_active:
             return sig(symbol, side, ExitReason.PROFIT_LOCK, 0.5, price, ema20,
                       round(dist, 2), round(rsi_val, 1), False, True,
                       f"[PROFIT LOCK] +{pnl_pct:.1f}% ohne Pattern → 50% + Trailing")

@@ -33,6 +33,7 @@ class TrackedPosition:
     entry_time: str
     pattern_exit_done: bool  # 50% already closed via pattern
     pnl_pct: float = 0.0
+    profit_lock_pct: float = 0.0   # per-Trade-Ziel (2R); 0 = Config-Default
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -123,6 +124,7 @@ class Watcher:
                     current_step=pos.steps,
                     trailing_active=pos.trailing_active,
                     trailing_price=pos.trailing_price,
+                    profit_lock_pct=pos.profit_lock_pct or None,
                 )
 
                 if signal.reason != ExitReason.NONE:
