@@ -389,7 +389,9 @@ class BiasAnalyzer:
                     green_candles=green, red_candles=red,
                     signal_count=0,
                     reason=f"NOISE (Role-Mode: 1H {h1_sig} — kein gerichteter Bias) {tf_detail} | {chg_note}{vol_note}",
-                    regime={"regime": "ROLE_1H_NEUTRAL", "veto": True},
+                    # Kein Veto, sondern "keine Richtung". Als veto=True
+                    # wuerde jede neutrale 1H die Veto-Quote verfaelschen.
+                    regime={"regime": "ROLE_1H_NEUTRAL", "veto": False},
                 )
             four_h_veto = bool(regime_cfg.get("four_h_veto", True))
             if four_h_veto and tf_4h["signal"] in ("BULLISH", "BEARISH") and tf_4h["signal"] != h1_sig:

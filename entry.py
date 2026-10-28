@@ -68,6 +68,7 @@ class EntrySignal:
     bar_close_pos: float = 0.0   # Close-Position im Entry-Bar (0=Tief, 1=Hoch)
     atr_pct: float = 0.0         # ATR(5m) in % des Preises
     atr_ratio: float = 0.0       # ATR(5m) / Median der letzten 20 Bars
+    wick_depth_pct: float = 0.0  # EMA-Durchstich des Bar-Tiefs/Hochs in %
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -125,6 +126,19 @@ class EntryEngine:
         open_: float, high: float, low: float, close: float,
         ema: float, bias: str,
     ) -> bool:
+        return self._rejection_check(open_, high, low, close, ema, bias)[0]
+
+    def _rejection_check(
+        self,
+        open_: float, high: float, low: float, close: float,
+        ema: float, bias: str,
+    ) -> tuple[bool, str]:
+        """Wie _is_rejection_candle, liefert aber den konkreten Ablehnungsgrund.
+
+        Der Grund landet im Session-Debug-Log. Vorher stand dort nur
+        "keine Rejection" — Volumen-, Wick- und Geometrie-Blocker waren
+        nicht unterscheidbar (PEPE 28.10.: Wick 0.72% > 0.5%).
+        """
         """
         Prüft ob die letzte Kerze eine Rejection ist.
 
@@ -137,46 +151,52 @@ class EntryEngine:
         """
         body = abs(close - open_)
         if body == 0:
-            return False
+            return False, "Doji (Body 0)"
 
         WICK_TOLERANCE_PCT = 0.5   # 5m-Kerze darf 0.5% durch die EMA wicken
         MIN_BODY_RATIO = 0.25       # Body muss ≥ 25% des Wicks sein
 
         candle_range = high - low
         if candle_range <= 0:
-            return False
+            return False, "Range 0"
 
         if bias == "LONG":
             if close <= open_:
-                return False
+                return False, "Bar schließt bärisch"
             # Low nahe EMA (Support)
             low_dist = (ema - low) / ema * 100
             if low_dist > WICK_TOLERANCE_PCT:
-                return False
+                return False, f"Wick {low_dist:.2f}% > {WICK_TOLERANCE_PCT:.2f}%"
             # Close muss im oberen Bereich der Kerze liegen (starker Schluss)
             if close < low + candle_range * 0.6:
-                return False
+                pos = (close - low) / candle_range * 100
+                return False, f"Close bei {pos:.0f}% der Range (<60%)"
             upper_wick = high - close
             if upper_wick <= 0:
-                return True  # Kein oberer Wick → klare Rejection
-            return body >= upper_wick * MIN_BODY_RATIO
+                return True, ""  # Kein oberer Wick → klare Rejection
+            if body < upper_wick * MIN_BODY_RATIO:
+                return False, "Body zu klein vs. oberer Wick"
+            return True, ""
 
         elif bias == "SHORT":
             if close >= open_:
-                return False
+                return False, "Bar schließt bullisch"
             # High nahe EMA (Resistance)
             high_dist = (high - ema) / ema * 100
             if high_dist > WICK_TOLERANCE_PCT:
-                return False
+                return False, f"Wick {high_dist:.2f}% > {WICK_TOLERANCE_PCT:.2f}%"
             # Close muss im unteren Bereich der Kerze liegen (starker Schluss)
             if close > low + candle_range * 0.4:
-                return False
+                pos = (close - low) / candle_range * 100
+                return False, f"Close bei {pos:.0f}% der Range (>40%)"
             lower_wick = min(open_, close) - low
             if lower_wick <= 0:
-                return True  # Kein unterer Wick → klare Rejection
-            return body >= lower_wick * MIN_BODY_RATIO
+                return True, ""  # Kein unterer Wick → klare Rejection
+            if body < lower_wick * MIN_BODY_RATIO:
+                return False, "Body zu klein vs. unterer Wick"
+            return True, ""
 
-        return False
+        return False, "unbekannte Bias-Richtung"
 
     # ─── EMA-Positions-Check: Preis muss auf richtiger Seite der EMA20 sein ──
 
@@ -392,6 +412,19 @@ class EntryEngine:
 
         # Preis an der EMA → AT_EMA
         signal.state = EntryState.AT_EMA
+        # Wie tief hat der letzte geschlossene Bar die EMA durchstochen?
+        # Das ist genau die Groesse, an der PEPE am 28.10. scheiterte
+        # (0.72% vs 0.50% Toleranz) — als Zahl, nicht als Vermutung.
+        try:
+            last_close_bar = data[-1]
+            if bias == "LONG":
+                signal.wick_depth_pct = round(
+                    (current_ema - float(last_close_bar[3])) / current_ema * 100, 3)
+            else:
+                signal.wick_depth_pct = round(
+                    (float(last_close_bar[2]) - current_ema) / current_ema * 100, 3)
+        except Exception:
+            pass
 
         # Fast-Entry ENTFERNT — 30-65 RSI ist praktisch immer wahr und
         # umgeht die Rejection+Volumen-Bestätigung komplett.
@@ -400,19 +433,27 @@ class EntryEngine:
         # Rejection auf den letzten drei *geschlossenen* 5m-Kerzen prüfen.
         # Nur die allerletzte Kerze zu akzeptieren verpasst gültige Pullbacks:
         # die Folgekerze kann bereits wieder von der EMA weg laufen.
+        block_reason = ""       # spezifisch: Rejection erkannt, aber Gate blockt
+        generic_reason = ""     # kein Bar war ueberhaupt eine Rejection
         try:
             data_5m = data
             if len(data_5m) < 12:
                 return signal
 
             recent_start = max(0, len(data_5m) - 3)
+            # Grund des letzten verworfenen Kandidaten mitloggen. Ohne das
+            # stand im Log nur "an EMA — keine Rejection" und man konnte
+            # Volumen- von Geometrie-Blockern nicht unterscheiden (28.10.).
             for idx in range(len(data_5m) - 1, recent_start - 1, -1):
                 open5, high5, low5, close5 = map(
                     float, data_5m[idx, 1:5]
                 )
-                if not self._is_rejection_candle(
+                is_rejection, fail_reason = self._rejection_check(
                     open5, high5, low5, close5, current_ema, bias
-                ):
+                )
+                if not is_rejection:
+                    if not generic_reason:
+                        generic_reason = f"keine Rejection: {fail_reason}"
                     continue
 
                 # Volumen-Confirmation auf GENAU dieser Rejection-Kerze.
@@ -429,6 +470,8 @@ class EntryEngine:
                 except Exception:
                     vol_ratio = 0.0
                 if min_vol > 0 and vol_ratio < min_vol:
+                    if not block_reason:
+                        block_reason = f"Volumen {vol_ratio:.2f}x < {min_vol:.2f}x"
                     continue
 
                 # Distanz-Check (nach Volumen, damit Logs den echten Grund zeigen)
@@ -449,8 +492,14 @@ class EntryEngine:
                     pos_last = (float(last_bar[4]) - float(last_bar[3])) / rng_last
                     min_pos = float(cfg.get("entry_bar_min_close_pos", 0.35))
                     if bias == "LONG" and pos_last < min_pos:
+                        if not block_reason:
+                            block_reason = (f"Entry-Bar bei {pos_last*100:.0f}% der "
+                                            f"Range (<{min_pos*100:.0f}%)")
                         continue
                     if bias == "SHORT" and pos_last > (1.0 - min_pos):
+                        if not block_reason:
+                            block_reason = (f"Entry-Bar bei {pos_last*100:.0f}% der "
+                                            f"Range (>{100-min_pos*100:.0f}%)")
                         continue
 
                 # Nicht zum alten Kerzenschluss kaufen: Die Rejection ist
@@ -476,6 +525,8 @@ class EntryEngine:
                 return signal
         except Exception:
             pass
+        if not signal.reasoning:
+            signal.reasoning = block_reason or generic_reason
         return signal
 
     # ─── Active Position Tracking ──────────────────────────────

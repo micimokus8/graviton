@@ -36,11 +36,17 @@ TRADE_LOG_FILE = DATA_DIR / "trade_log.jsonl"
 DEBUG_LOG_FILE = DATA_DIR / "session_debug.jsonl"  # pro Polling-Cycle: Coin, Status, Grund
 WATCHLIST_MAX_AGE_SECONDS = 45 * 60
 BIAS_MAX_AGE_SECONDS = 15 * 60
-# Entry-Fenster: harte Obergrenze gegen veraltete Bias-Snapshots.
-# Messung 27.10.: Bias 12:46 UTC -> Entry 12:50 UTC = 4 Min (nicht 20 —
-# die KI hatte Scan->Entry gemessen). 15 Min = 1 Bias-Bar Cap, laesst aber
-# genug Polling-Zeit nach dem 5-Min-Cron-Versatz (Bias 14:45, Session 14:50).
-ENTRY_WINDOW_SECONDS = 15 * 60
+# Entry-Fenster: harte Obergrenze gegen veraltete Bias-Snapshots, gemessen
+# ab Bias-Schreibzeit. Zwei Effekte fressen das Fenster auf:
+#   1. Cron-Versatz: Bias :45, Session :50 -> 5 Min sind schon weg.
+#   2. Der Loop stoppt 30s vor der Deadline -> die letzte 5m-Kerze muss
+#      VOR deadline-30s geschlossen sein.
+# Mit 15 Min blieben real nur ~9,5 Min = 2 Bars (28.10.: die einzige valide
+# Rejection schloss um 14:00, also 30s nach dem Fenster -> kein Trade).
+# Historie (41 Trades, Bias :45): 36x :50/:51, 3x :55, 1x :00, 1x :05.
+# 20 Min deckt alle 41 ab; im Role-Mode haengt der Bias an der 1H-Kerze,
+# 20 Min = 0,33 Bars. Kein Freifahrtschein: MAX_BIAS_AGE ist die Staleness-Grenze.
+ENTRY_WINDOW_SECONDS = 20 * 60
 MARKET_SENTIMENT_FILE = DATA_DIR / "market_sentiment.json"
 MARKET_SENTIMENT_MAX_AGE_SECONDS = 6 * 60 * 60  # eine Session lang gültig (log-only Kontext)
 
@@ -690,10 +696,15 @@ def _run_session(session_key: str):
                 elif signal.state == EntryState.APPROACHING:
                     reason = f"EMA-Distanz {signal.distance_pct:.2f}% > dynamische Distanz"
                 elif signal.state == EntryState.AT_EMA:
-                    reason = f"An EMA ({signal.distance_pct:.2f}%) — warte auf Rejection"
+                    # entry.py liefert jetzt den konkreten Blockgrund
+                    # (Volumen / Entry-Bar-Geometrie / keine Rejection-Kerze).
+                    reason = (f"An EMA ({signal.distance_pct:.2f}%) — {signal.reasoning}"
+                              if signal.reasoning else
+                              f"An EMA ({signal.distance_pct:.2f}%) — warte auf Rejection")
                 _log_debug(cycle, base, bias, state_name, reason,
                            price=round(signal.price, 6), ema20=round(signal.ema20, 6),
-                           dist=round(signal.distance_pct, 3))
+                           dist=round(signal.distance_pct, 3),
+                           wick=round(float(getattr(signal, "wick_depth_pct", 0.0)), 3))
                 cycle_signals.append((cand, signal))
 
                 if signal.state == EntryState.AT_EMA:
@@ -844,7 +855,8 @@ def _run_session(session_key: str):
                 elif sig.state == EntryState.APPROACHING:
                     summary_reasons.append(f"{_base(cand)}: {sig.distance_pct:.1f}% von EMA (nähert sich)")
                 elif sig.state == EntryState.AT_EMA:
-                    summary_reasons.append(f"{_base(cand)}: an EMA — keine Rejection")
+                    summary_reasons.append(
+                        f"{_base(cand)}: an EMA — {sig.reasoning or 'keine Rejection'}")
                 else:
                     summary_reasons.append(f"{_base(cand)}: {sig.state}")
             except Exception as e:

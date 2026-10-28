@@ -74,6 +74,8 @@ class EntryPullbackTests(unittest.TestCase):
 
         self.assertNotEqual(signal.state, EntryState.ENTERED)
         self.assertIn("AT_EMA", signal.state.name)
+        # Der Blockgrund muss im Log stehen, nicht nur "keine Rejection".
+        self.assertIn("Entry-Bar", signal.reasoning)
 
     def test_rejection_without_volume_is_not_entered(self):
         # Signal-Bar mit 0.4x Median-Volumen: keine Beteiligung = keine Rejection.
@@ -89,6 +91,25 @@ class EntryPullbackTests(unittest.TestCase):
         signal = engine.check_entry("ENA/USD:USD", "LONG")
 
         self.assertNotEqual(signal.state, EntryState.ENTERED)
+        self.assertIn("Volumen", signal.reasoning)
+
+    def test_deep_wick_reports_reason_and_depth(self):
+        # PEPE 28.10.: Low 0.72% unter EMA20 -> Wick-Toleranz 0.5% verletzt.
+        # Der Grund muss im Signal stehen, nicht nur "keine Rejection".
+        candles = []
+        for i in range(30):
+            candles.append([i * 300_000, 100.0, 100.05, 99.95, 100.0, 100.0])
+        candles[-1] = [29 * 300_000, 99.90, 100.02, 99.20, 99.98, 150.0]
+
+        engine = EntryEngine()
+        engine._exchange = _PullbackExchange(candles)
+        engine._calc_sl_pct = lambda symbol, price: 1.4
+
+        signal = engine.check_entry("PEPE/USD:USD", "LONG")
+
+        self.assertNotEqual(signal.state, EntryState.ENTERED)
+        self.assertIn("Wick", signal.reasoning)
+        self.assertGreater(signal.wick_depth_pct, 0.5)
 
 
 if __name__ == "__main__":

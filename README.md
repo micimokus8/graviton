@@ -94,10 +94,15 @@ Entry requires:
 
 Entry behavior:
 
-- No new entry after **15 minutes from the bias file timestamp** or after session close.
-  Measured latency on 27.10.: bias 12:46 UTC → entry 12:50:23 UTC = 4 min 13 s.
-  The window is a staleness cap, not the expected latency, and is tied to the
-  5-minute cron cadence (revisit if cron goes to 1 minute).
+- No new entry after **20 minutes from the bias file timestamp** or after session close.
+  The window is a staleness cap, not the expected latency (measured 27.10.:
+  bias 12:46 → entry 12:50:23 = 4 min 13 s). Two effects eat into it: the
+  5-minute cron offset (bias :45, session :50) and the loop stopping 30 s
+  before the deadline, so the last 5m bar must close before deadline−30 s.
+  With 15 min only ~9.5 min (2 bars) remained — the single valid PEPE
+  rejection on 28.10. closed 30 s after the window. History (41 trades,
+  bias :45): 36× at :50/:51, 3× at :55, 1× at :00, 1× at :05 → 20 min covers
+  all of them. Revisit if the cron cadence drops to 1 minute.
 - All active candidates are checked every 30 seconds in each cycle.
 - **Candidate sorting (since 10.10.):** signals are sorted by **bias strength first**
   (3/3 before 2/3), EMA distance only as tie-breaker — a weak 2/3 pullback can
@@ -230,7 +235,7 @@ Job              UTC     CET*    Description
 ───────────────  ──────  ──────  ───────────────────────────────
 NY Scan (pre)    13:30   14:30   Writes watchlist for bias
 NY Bias          13:45   14:45   4H/1H/15m bias + regime → shadow → breadth
-NY Session       13:50   14:50   Polling; entries limited to 15 min after bias
+NY Session       13:50   14:50   Polling; entries limited to 20 min after bias
 Asia Scan        00:30   01:30   Paused
 Asia Session     01:00   02:00   Paused
 ```
@@ -262,6 +267,10 @@ they were adjusted on the DST boundary (25.10.) and shift again on 01.11.
 These fields exist so the filters are **measured, not guessed**: volume ratio,
 close position, ATR ratio, ADX label, bias age, MFE and the realised R:R are
 continuous variables for later bucket analysis.
+
+Rejected candidates are logged too: `session_debug.jsonl` carries the exact
+gate (`reason`), the EMA distance and the last bar's EMA penetration
+(`wick`), e.g. `keine Rejection: Wick 0.72% > 0.50%`.
 
 `data/session_debug.jsonl` contains one entry per coin per polling cycle:
 
@@ -325,6 +334,9 @@ If no entry occurs, a Telegram summary explains why for each candidate.
 | **Entry-bar geometry** | not checked | **close ≥35% of range (LONG)** | DASH closed at 0% of its range — long into a falling knife |
 | **Exit target** | fixed 2.0% (1.4R) | **2R of actual SL** (min 2%, cap 10%) | Fixed lock ignored stop width; DASH now 2.83% |
 | **Entry window** | 30 min | **15 min** | Staleness cap tied to the 5-min cron cadence |
+| **Entry window** | 15 min | **20 min** | 15 min left only ~9.5 min of polling (cron offset + 30 s guard); 2/41 historical entries came at 15–20 min |
+| **Rejection reasons** | "keine Rejection" | **exact gate + wick depth** | PEPE 28.10.: wick 0.72 % > 0.5 % was invisible in the log |
+| **Deploy** | edits in `graviton/scripts/` | **active cron scripts symlinked to the repo** | Cron ran a 10.10. copy → `regime` never reached `bias_result.json` |
 | **Mode** | LIVE | **DRY_RUN** (25.10.2026) | Live pause during the signal rework |
 
 ## API Keys
