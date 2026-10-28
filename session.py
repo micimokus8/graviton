@@ -637,11 +637,13 @@ def _run_session(session_key: str):
     stop_loss = 0.0
     last_status_msg = 0
 
-    # S/R vorab hart prüfen. Blockierte Kandidaten werden nie als Fallback
-    # zurück in die Entry-Rotation aufgenommen.
-    active_candidates, blocked_candidates = _partition_sr_candidates(candidates)
-    for blocked_candidate, block_reason in blocked_candidates:
-        print(f"🚫 {_base(blocked_candidate)}: S/R-Block — {block_reason}")
+    # KEIN S/R-Vorabfilter mehr. Er lief einmalig mit dem Preis aus dem
+    # Bias-Snapshot und nahm einen Coin dauerhaft aus der Rotation — auch
+    # wenn der Preis bis zum Entry längst durch das Level gelaufen war.
+    # DASH 28.10.: Snapshot 53.30 -> Block (Support 53.28, 0.04% entfernt);
+    # um 13:50 stand der Preis bei 53.02, dort ist derselbe Check erlaubt.
+    # Verbindlich ist jetzt ausschließlich der Check am echten Entry-Preis.
+    active_candidates = list(candidates)
 
     # Priorität: 3/3 Signale zuerst, 2/3 als Fallback
     if active_candidates:
@@ -653,11 +655,6 @@ def _run_session(session_key: str):
             active_candidates = priority + fallback  # 3/3 zuerst, dann 2/3
         else:
             print(f"   Kein 3/3 — alle {len(fallback)}× 2/3 aktiv")
-
-    if not active_candidates:
-        msg = f"⚠️ [{name}] Alle Kandidaten S/R-geblockt — Session beendet."
-        print(msg); tg(msg)
-        return
 
     # Transparente Bias-Rangfolge. Die laufende Entry-Prüfung bleibt dynamisch:
     # bei gleichzeitig gültigen Signalen entscheidet weiterhin die EMA-Distanz.
@@ -725,12 +722,15 @@ def _run_session(session_key: str):
             base = _base(cand)
 
             if signal.state == EntryState.ENTERED:
-                # S/R kann sich seit dem Bias-Snapshot verschoben haben.
-                # Deshalb direkt am tatsächlichen Entry-Preis erneut prüfen.
-                entry_sr_blocked, entry_sr_reason, _ = check_sr_for_entry(
-                    symbol, signal.entry_price, bias
-                )
-                if entry_sr_blocked:
+                # S/R verbindlich am TATSÄCHLICHEN Entry-Preis prüfen (nicht
+                # am Bias-Snapshot). Blockiert nur diesen einen Versuch; der
+                # Coin bleibt in der Rotation und wird im nächsten Cycle mit
+                # frischem Preis erneut bewertet.
+                _allowed, _blocked = _partition_sr_candidates([{
+                    "symbol": symbol, "bias": bias, "price": signal.entry_price,
+                }])
+                if _blocked:
+                    entry_sr_reason = _blocked[0][1]
                     print(f"  [{_ts_str()}] {base}: S/R am Entry blockiert — {entry_sr_reason}")
                     _log_debug(
                         cycle, base, bias, "sr_blocked_at_entry", entry_sr_reason,

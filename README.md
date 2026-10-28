@@ -107,7 +107,12 @@ Entry behavior:
 - **Candidate sorting (since 10.10.):** signals are sorted by **bias strength first**
   (3/3 before 2/3), EMA distance only as tie-breaker — a weak 2/3 pullback can
   no longer beat a strong 3/3 signal (ZRO 10.10. regression case).
-- S/R is checked before rotation and again at the actual entry price.
+- S/R is checked **only at the actual entry price**, per cycle. The former
+  one-shot pre-filter used the price from the bias snapshot and removed a coin
+  for the whole session: DASH 28.10. was blocked at 53.30 (support 53.28,
+  0.04 % away), while at 13:50 the live price was 53.02 — the same check
+  passes there. A blocked entry attempt only skips that cycle; the coin stays
+  in the rotation and is re-evaluated with a fresh price 30 s later.
 - BTC 1m counter-trend correlation can skip an otherwise valid candidate.
 - Volume is checked twice by design: session activity in scan/bias **and**
   participation on the rejection candle in the entry.
@@ -337,6 +342,7 @@ If no entry occurs, a Telegram summary explains why for each candidate.
 | **Entry window** | 15 min | **20 min** | 15 min left only ~9.5 min of polling (cron offset + 30 s guard); 2/41 historical entries came at 15–20 min |
 | **Rejection reasons** | "keine Rejection" | **exact gate + wick depth** | PEPE 28.10.: wick 0.72 % > 0.5 % was invisible in the log |
 | **Deploy** | edits in `graviton/scripts/` | **active cron scripts symlinked to the repo** | Cron ran a 10.10. copy → `regime` never reached `bias_result.json` |
+| **S/R block** | one-shot with bias-snapshot price | **per entry, at the live price** | A stale-price block removed DASH from the whole session although the level was already broken |
 | **Mode** | LIVE | **DRY_RUN** (25.10.2026) | Live pause during the signal rework |
 
 ## API Keys
