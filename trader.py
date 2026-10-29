@@ -16,14 +16,15 @@ Watcher:
 
 from __future__ import annotations
 import ccxt
+import json
 import os
 import time
+from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
-from config import CFG
+from config import CFG, DRY_RUN
 
 
 _ENV_PATH = Path(__file__).parent / ".env"
@@ -39,6 +40,17 @@ if _ENV_PATH.exists():
 
 KRAKEN_KEY = os.getenv("KRAKEN_API_KEY", "")
 KRAKEN_SECRET = os.getenv("KRAKEN_API_SECRET", "")
+
+
+def _log_dry_run_trade(payload: dict) -> None:
+    """Schreibt Dry-Run-Events ins Trade-Log des aktiven Modus."""
+    try:
+        path = Path(getattr(CFG, "data_dir", Path(__file__).parent / "data")) / "trade_log.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as fh:
+            fh.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
 
 
 @dataclass
@@ -116,6 +128,9 @@ class KrakenTrader:
     # ─── Position Sizing ───────────────────────────────────────
 
     def calc_position_size(self) -> float:
+        fixed = CFG.position.get("fixed_usd") or 0
+        if fixed > 0:
+            return float(fixed)
         equity = self.get_equity()
         risk_pct = CFG.position["account_risk_pct_per_coin"] / 100
         return equity * risk_pct
@@ -161,6 +176,24 @@ class KrakenTrader:
         if not KRAKEN_KEY:
             return FillResult(False, symbol, side, "", 0, 0, 0,
                             "DRY RUN", datetime.now(timezone.utc).isoformat())
+
+        if DRY_RUN:
+            # KEIN API-Call im Dry-Run. Vorher fehlte dieser Guard im Trader
+            # (nur die Session prueft DRY_RUN) — ein manueller Test hat am
+            # 28.10. eine echte Kraken-Order ausgeloest.
+            if size_usd is None:
+                size_usd = self.calc_position_size()
+            try:
+                px = float(self._get_exchange().fetch_ticker(symbol)["last"])
+            except Exception:
+                px = 0.0
+            size = self.get_size_contracts(symbol, size_usd) if px > 0 else 0.0
+            ts = datetime.now(timezone.utc).isoformat()
+            _log_dry_run_trade({"event": "entry", "timestamp": ts, "symbol": symbol,
+                                "bias": side.upper(), "entry": px,
+                                "size": size, "size_usd": size_usd, "mode": "DRY_RUN"})
+            return FillResult(True, symbol, side, f"dry-{int(time.time())}", px, size,
+                              round(size * px, 4), "DRY RUN Fill (simuliert)", ts)
 
         try:
             ex = self._get_exchange()
@@ -281,6 +314,13 @@ class KrakenTrader:
             ex = self._get_exchange()
             ex.load_markets()
 
+            if DRY_RUN:
+                _log_dry_run_trade({"event": "sl", "timestamp": datetime.now(timezone.utc).isoformat(),
+                                    "symbol": symbol, "side": side, "stop": stop_price,
+                                    "mode": "DRY_RUN"})
+                print(f"[Trader] DRY RUN SL {symbol} {stop_price}")
+                return True
+
             # Round to market precision
             ndigits = self._price_precision(symbol)
             sl_rounded = round(stop_price, ndigits)
@@ -372,6 +412,27 @@ class KrakenTrader:
             return TradeResult(False, symbol, side, "", 0, 0, 0,
                              "DRY RUN", datetime.now(timezone.utc).isoformat())
 
+        if DRY_RUN:
+            # Im Dry-Run gibt es keine Exchange-Position. Ein manuelles
+            # Schliessen wird trotzdem protokolliert, damit ein Test-Trade
+            # (oeffnen -> SL editieren -> schliessen) nachvollziehbar bleibt
+            # und nicht spurlos verschwindet.
+            ts = datetime.now(timezone.utc).isoformat()
+            try:
+                path = Path(getattr(CFG, "data_dir", Path(__file__).parent / "data")) / "trade_log.jsonl"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a") as fh:
+                    fh.write(json.dumps({
+                        "event": "exit", "timestamp": ts, "symbol": symbol,
+                        "bias": (side or "").upper(), "reason": "manual_close",
+                        "close_pct": round(close_pct * 100, 1), "mode": "DRY_RUN",
+                    }) + "\n")
+            except Exception:
+                pass
+            return TradeResult(True, symbol, side, f"dry-{int(time.time())}", 0.0,
+                               float(amount or 0.0), 0.0,
+                               "DRY RUN Close (simuliert, protokolliert)", ts)
+
         try:
             ex = self._get_exchange()
             ex.load_markets()
@@ -382,10 +443,15 @@ class KrakenTrader:
             # Get position — match side
             positions = ex.fetch_positions([symbol])
             pos = None
+            # Die Position hat die GEGEN-Seite des Close-Orders: ein Long
+            # wird mit "sell" geschlossen, steht aber als "buy" in der Position.
+            # Vorher wurde p_side == side verglichen -> Close fand nie eine
+            # Position und meldete "Keine Position".
+            want_side = "buy" if str(side).lower() == "sell" else "sell"
             for p in positions:
                 c = float(p.get("contracts", 0) or 0)
                 p_side = (p.get("side", "") or "").lower()
-                if c > 0 and p_side == side:
+                if c > 0 and p_side == want_side:
                     pos = p
                     break
 

@@ -1,4 +1,11 @@
 #!/bin/bash
+# Modus (crypto | stocks) aus MODE-Datei — EIN Cron fuer beide Modi.
+GV_MODE="$(tr -d '[:space:]' < /root/.hermes/workspace/graviton/MODE 2>/dev/null || true)"
+export GRAVITON_MODE="${GV_MODE:-crypto}"
+GV_DATA="/root/.hermes/workspace/graviton/data"
+[ "$GRAVITON_MODE" = "stocks" ] && GV_DATA="$GV_DATA/stocks"
+mkdir -p "$GV_DATA"
+
 set -o pipefail
 # Graviton Bias Cron — NY (16:01 DE) / Asia (00:01 DE)
 # Läuft bias.py im Hintergrund (kein Warten auf Session nötig — bias.py ist instant)

@@ -40,6 +40,15 @@ def _env_float(key: str, default: float = 0.0) -> float:
 
 DRY_RUN = True  # DRY_RUN aktiviert 25.10 auf User-Wunsch (Live-Pause)
 
+# Zwei Modi, EIN Bot, EIN Cron. Umgeschaltet wird ueber die Umgebungsvariable
+# GRAVITON_MODE (die Cron-Skripte lesen sie aus der Datei MODE).
+#   crypto — wie bisher: 24/7-faehig, 5m-Entry, enger SL
+#   stocks — tokenisierte Aktien-Perps (AAPLX, SPCXX, NVDAX, ...):
+#            15m-Entry, weiterer SL, eigenes Datenverzeichnis, nur Mo-Fr
+MODE = _env("GRAVITON_MODE", "crypto").strip().lower()
+if MODE not in {"crypto", "stocks"}:
+    MODE = "crypto"
+
 SESSIONS = {
     "ny":   {"scan": "13:00", "open": "13:30", "close": "17:00"},
     "asia": {"scan": "23:30", "open": "00:00", "close": "02:00"},
@@ -166,7 +175,10 @@ SR = {
 EQUITY_USD = _env_float("EQUITY_USD", 200.0)
 
 POSITION = {
-    "account_risk_pct_per_coin":  8.75,   # ~$50 Position bei ~$570 Equity (halbiert für Live-Start)
+    # Fixer Einsatz pro Trade (User-Vorgabe 28.10.): 100 USDC, unabhaengig von
+    # der Equity. 0 = stattdessen account_risk_pct_per_coin nutzen.
+    "fixed_usd":                  100.0,
+    "account_risk_pct_per_coin":  8.75,
     "max_total_exposure_pct":     17.5,   # = 1 Position
 }
 
@@ -224,12 +236,85 @@ class Config:
     exchange: dict = field(default_factory=lambda: dict(EXCHANGE))
     base_dir: Path = BASE_DIR
     logs_dir: Path = LOGS_DIR
+    mode: str = MODE
+    # default_factory: die Modus-Profile werden erst NACH der Klasse berechnet
+    data_dir: Path = field(default_factory=lambda: DATA_DIR)
+    weekdays_only: bool = field(default_factory=lambda: WEEKDAYS_ONLY)
+    universe: str = field(default_factory=lambda: UNIVERSE)
 
     def __getitem__(self, key):
         return getattr(self, key)
 
     def get(self, key, default=None):
         return getattr(self, key, default)
+
+
+# ─── Mode-Profile ──────────────────────────────────────────────────
+# Werte werden VOR Config() in die Modul-Dicts gemischt, damit alle Module
+# (Scanner, Session, Entry, Exit) unveraendert ueber CFG.* lesen koennen.
+
+from datetime import datetime as _dt, time as _time, timezone as _tz  # noqa: E402
+from zoneinfo import ZoneInfo as _ZoneInfo  # noqa: E402
+
+_NY = _ZoneInfo("America/New_York")
+
+
+def _ny_to_utc(hhmm: str) -> str:
+    """NYSE-Uhrzeit (ET) -> UTC. Beruecksichtigt die US-Sommerzeit automatisch."""
+    today = _dt.now(_NY).date()
+    t = _time(*[int(x) for x in hhmm.split(":")])
+    return _dt.combine(today, t, tzinfo=_NY).astimezone(_tz.utc).strftime("%H:%M")
+
+
+def _ny_window(open_et: str = "09:30", close_et: str = "16:00", scan_lead_min: int = 10) -> dict:
+    o, c = _ny_to_utc(open_et), _ny_to_utc(close_et)
+    oh, om = (int(x) for x in o.split(":"))
+    total = (oh * 60 + om - scan_lead_min) % (24 * 60)
+    return {"scan": f"{total // 60:02d}:{total % 60:02d}", "open": o, "close": c}
+
+
+MODE_PROFILES = {
+    "crypto": {
+        "sessions": {"ny": {"scan": "13:00", "open": "13:30", "close": "17:00"},
+                     "asia": {"scan": "23:30", "open": "00:00", "close": "02:00"}},
+        "active_sessions": ["ny"],
+        "scan": {"min_change_pct": 3.0, "min_volume_eur": 500_000, "max_watchlist": 8},
+        "entry": {"entry_tf": "5m", "sl_offset_pct": 1.50, "sl_cap_pct": 5.0},
+        "exit": {"target_rr": 3.0, "target_max_pct": 10.0, "profit_lock_pct": 2.0},
+        "data_dir": None,            # = data/
+        "weekdays_only": False,
+        "universe": "crypto",
+    },
+    "stocks": {
+        # NYSE 9:30-16:00 ET. Die UTC-Zeiten werden beim Import berechnet,
+        # damit die US-Zeitumstellung (1.11.) kein manuelles Nachziehen braucht.
+        "sessions": {"ny": _ny_window("09:30", "16:00", 10)},
+        "active_sessions": ["ny"],
+        # Aktien bewegen 1-3%/Tag — der Krypto-Filter (3%) wuerde alles aussortieren.
+        "scan": {"min_change_pct": 0.8, "min_volume_eur": 100_000, "max_watchlist": 8},
+        # 15m (Backtest: +12.4% vs +1.7% auf 5m), SL 2.5% statt 1.5%: ATR15m
+        # auf Aktien ist ~0.3%, ein 1.5-ATR-Stop waere 0.45% und würde im
+        # normalen Tagesrauschen liegen.
+        "entry": {"entry_tf": "15m", "sl_offset_pct": 2.50, "sl_cap_pct": 6.0},
+        # TP 2R statt 3R: bei 2.5% SL sind 3R = 7.5% Tagesziel, das praktisch
+        # nie erreicht wird (Backtest: 4 TP-Treffer in 177 Trades).
+        "exit": {"target_rr": 2.0, "target_max_pct": 12.0, "profit_lock_pct": 2.5},
+        "data_dir": "data/stocks",
+        "weekdays_only": True,
+        "universe": "xstocks",
+    },
+}
+
+_profile = MODE_PROFILES[MODE]
+SESSIONS = _profile["sessions"]
+ACTIVE_SESSIONS = _profile["active_sessions"]
+SCAN.update(_profile["scan"])
+ENTRY.update(_profile["entry"])
+EXIT.update(_profile["exit"])
+DATA_DIR = BASE_DIR / _profile["data_dir"] if _profile["data_dir"] else BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+WEEKDAYS_ONLY = _profile["weekdays_only"]
+UNIVERSE = _profile["universe"]
 
 
 # Singleton

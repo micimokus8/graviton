@@ -27,8 +27,11 @@ from candle_utils import closed_ohlcv
 from atomic_json import atomic_write_json
 from candidate_ranking import deterministic_rank
 
-DATA_DIR = Path(__file__).parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# Datenverzeichnis je Modus (crypto: data/, stocks: data/stocks/).
+# Getrennte trade_log/session_debug/bias_result, damit sich die Laeufe nicht
+# gegenseitig ueberschreiben.
+DATA_DIR = Path(getattr(CFG, "data_dir", Path(__file__).parent / "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 WATCHLIST_FILE = DATA_DIR / "watchlist.json"
 BIAS_RESULT_FILE = DATA_DIR / "bias_result.json"
 ENTRY_STATE_FILE = DATA_DIR / "entry_state.json"
@@ -512,6 +515,13 @@ def _run_session(session_key: str):
     session = SESSIONS[session_key]
     mode = "[DRY RUN]" if DRY_RUN else "[LIVE]"
     name = session_key.upper()
+
+    # Aktien-Perps: am Wochenende praktisch kein Handel (Sa/So nur 1/6 des
+    # Volumens und ein Drittel der Range) -> Session gar nicht erst starten.
+    if getattr(CFG, "weekdays_only", False) and datetime.now(timezone.utc).weekday() >= 5:
+        msg = f"⏸ [{name}] Wochenende — {getattr(CFG, 'mode', '?')}-Modus handelt Mo–Fr"
+        print(msg); tg(msg)
+        return
 
     # Session times
     open_h, open_m = map(int, session["open"].split(":"))

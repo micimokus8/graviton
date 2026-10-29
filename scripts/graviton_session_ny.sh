@@ -1,4 +1,11 @@
 #!/bin/bash
+# Modus (crypto | stocks) aus MODE-Datei — EIN Cron fuer beide Modi.
+GV_MODE="$(tr -d '[:space:]' < /root/.hermes/workspace/graviton/MODE 2>/dev/null || true)"
+export GRAVITON_MODE="${GV_MODE:-crypto}"
+GV_DATA="/root/.hermes/workspace/graviton/data"
+[ "$GRAVITON_MODE" = "stocks" ] && GV_DATA="$GV_DATA/stocks"
+mkdir -p "$GV_DATA"
+
 # Graviton Session Cron — NY (14:02 UTC) / Asia (00:02 UTC)
 # Läuft session.py im Hintergrund — Cron-Timeout killt den Prozess nicht.
 # session.py sendet Live-Updates via Telegram (tg()).

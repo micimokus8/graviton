@@ -150,9 +150,14 @@ class KrakenScanner:
             sym = market["symbol"]
             base = market.get("base", "")
 
-            # Non-crypto filter: xStocks (tokenisierte Aktien) aussortieren
+            # Universum je Modus: crypto handelt Coins, stocks nur xStocks.
+            # (xStocks = tokenisierte Aktien-Perps wie AAPLX, SPCXX, NVDAX.)
             cat = market.get("info", {}).get("category", "")
-            if cat == "xStocks":
+            is_stock = cat == "xStocks"
+            if getattr(CFG, "universe", "crypto") == "xstocks":
+                if not is_stock:
+                    continue
+            elif is_stock:
                 continue
             ticker = all_tickers.get(sym)
             if ticker is None:
@@ -273,8 +278,8 @@ def run_scan() -> List[ScanResult]:
 
 def _save_watchlist(results: List[ScanResult]):
     """Speichert Watchlist als JSON für Bias-Pipeline."""
-    data_dir = Path(__file__).parent / "data"
-    data_dir.mkdir(exist_ok=True)
+    data_dir = Path(getattr(CFG, "data_dir", Path(__file__).parent / "data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
     watchlist = [
         {
             "symbol": r.symbol,
