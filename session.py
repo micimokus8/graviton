@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import SESSIONS, DRY_RUN, EXIT, profit_lock_pct_for
+from config import CFG, SESSIONS, DRY_RUN, EXIT, profit_lock_pct_for
 from entry import EntryEngine, EntryState
 from exit import ExitEngine, ExitReason
 from sr_levels import check_sr_for_entry

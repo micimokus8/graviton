@@ -78,7 +78,7 @@ class TraderSafetyTests(unittest.TestCase):
         trader = KrakenTrader()
         trader._exchange = exchange
 
-        with patch("trader.KRAKEN_KEY", "key"):
+        with patch("trader.KRAKEN_KEY", "key"), patch("trader.DRY_RUN", False):
             success = trader.set_stop_loss("X/USD:USD", "long", 99.0, amount=2.0)
 
         self.assertTrue(success)
@@ -94,7 +94,7 @@ class TraderSafetyTests(unittest.TestCase):
         trader = KrakenTrader()
         trader._exchange = exchange
 
-        with patch("trader.KRAKEN_KEY", "key"):
+        with patch("trader.KRAKEN_KEY", "key"), patch("trader.DRY_RUN", False):
             result = trader.close_position("X/USD:USD", "long", close_pct=0.5)
 
         self.assertTrue(result.success)
@@ -105,7 +105,7 @@ class TraderSafetyTests(unittest.TestCase):
         trader = KrakenTrader()
         trader._exchange = exchange
 
-        with patch("trader.KRAKEN_KEY", "key"):
+        with patch("trader.KRAKEN_KEY", "key"), patch("trader.DRY_RUN", False):
             success = trader.set_stop_loss("X/USD:USD", "long", 99.0, amount=2.0)
 
         self.assertTrue(success)
@@ -118,7 +118,7 @@ class TraderSafetyTests(unittest.TestCase):
         trader = KrakenTrader()
         trader._exchange = exchange
 
-        with patch("trader.KRAKEN_KEY", "key"):
+        with patch("trader.KRAKEN_KEY", "key"), patch("trader.DRY_RUN", False):
             success = trader.set_stop_loss("X/USD:USD", "long", 99.0, amount=2.0)
 
         self.assertFalse(success)

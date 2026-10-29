@@ -443,11 +443,12 @@ class KrakenTrader:
             # Get position — match side
             positions = ex.fetch_positions([symbol])
             pos = None
-            # Die Position hat die GEGEN-Seite des Close-Orders: ein Long
-            # wird mit "sell" geschlossen, steht aber als "buy" in der Position.
-            # Vorher wurde p_side == side verglichen -> Close fand nie eine
-            # Position und meldete "Keine Position".
-            want_side = "buy" if str(side).lower() == "sell" else "sell"
+            # Aufrufer uebergeben mal die Order-Seite ("sell"), mal die
+            # Positionsseite ("long"). ccxt liefert Positionen als long/short —
+            # vorher wurde "sell" gegen "short" verglichen, der Close fand nie
+            # eine Position ("Keine Position").
+            want_side = {"buy": "long", "sell": "short"}.get(str(side).lower(),
+                                                            str(side).lower())
             for p in positions:
                 c = float(p.get("contracts", 0) or 0)
                 p_side = (p.get("side", "") or "").lower()
