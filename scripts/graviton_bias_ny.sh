@@ -21,7 +21,7 @@ from bias import analyze_watchlist
 from atomic_json import atomic_write_json
 from datetime import datetime, timezone
 
-data_dir = __import__('pathlib').Path('data')
+data_dir = __import__('pathlib').Path(CFG.data_dir)
 wl_file = data_dir / 'watchlist.json'
 if not wl_file.exists():
     print('Keine Watchlist')
@@ -59,9 +59,9 @@ atomic_write_json(data_dir / 'bias_result.json', bias_out)
 # Optional LLM shadow enrichment is isolated from deterministic bias creation.
 # Read the already parsed .env-backed value from config.py; do not require the
 # caller/Cron to export LLM_BIAS_ENABLED separately.
-LLM_ENABLED_FROM_CONFIG="$(.venv/bin/python3 -c 'from config import LLM_BIAS_ENABLED; print(str(LLM_BIAS_ENABLED).lower())' 2>/dev/null || printf 'false')"
+LLM_ENABLED_FROM_CONFIG="$(.venv/bin/python3 -c 'from config import LLM_BIAS_ACTIVE; print(str(LLM_BIAS_ACTIVE).lower())' 2>/dev/null || printf 'false')"
 if [[ "$LLM_ENABLED_FROM_CONFIG" == "true" ]]; then
-  timeout --signal=TERM --kill-after=5s 40s .venv/bin/python3 shadow_runner.py data/bias_result.json >> "$LOG" 2>&1
+  timeout --signal=TERM --kill-after=5s 40s .venv/bin/python3 shadow_runner.py "$GV_DATA/bias_result.json" >> "$LOG" 2>&1
   status=$?
   if [ "$status" -ne 0 ]; then
     echo "[$(date -u '+%H:%M UTC')] LLM shadow skipped/failed (status=$status); deterministic bias bleibt aktiv" >> "$LOG"

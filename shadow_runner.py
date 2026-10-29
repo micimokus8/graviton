@@ -18,7 +18,14 @@ from llm_bias import decide_bias
 from candidate_ranking import decide_ranking, deterministic_rank
 
 
-def enrich(path: str | Path, history_path: str | Path = "data/bias_shadow_history.jsonl") -> int:
+def enrich(path: str | Path, history_path: str | Path | None = None) -> int:
+    """Haengt die LLM-Deutung an bias_result.json.
+
+    history_path landet standardmaessig NEBEN der Eingabedatei, damit die
+    Shadow-Historie im richtigen Modus-Verzeichnis liegt (data/ vs data/stocks/).
+    """
+    if history_path is None:
+        history_path = Path(path).parent / "bias_shadow_history.jsonl"
     """Enrich and archive a snapshot; never changes effective_bias."""
     target = Path(path)
     with target.open() as handle:

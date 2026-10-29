@@ -316,6 +316,12 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 WEEKDAYS_ONLY = _profile["weekdays_only"]
 UNIVERSE = _profile["universe"]
 
+# LLM-Shadow nur fuer Krypto: der Prompt ist krypto-spezifisch (BTC-Kontext,
+# Krypto-Indikatoren) und der Symbol-Parser scheitert an xStocks
+# (28.10.: 8 von 8 Laeufen "LLM-Rangfolge ungueltig"). Das Shadow-Bias
+# beeinflusst ohnehin keine Order — es kostet nur ~30-40s pro Bias-Lauf.
+LLM_BIAS_ACTIVE = LLM_BIAS_ENABLED and MODE == "crypto"
+
 
 # Singleton
 CFG = Config()

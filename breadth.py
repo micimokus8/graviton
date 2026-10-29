@@ -42,7 +42,8 @@ TOP_N = 20                # zusätzliche volumenstärkste Perps
 MIN_COINS_TF = 8          # unter dieser Mindestzahl gilt ein TF als UNKNOWN
 MIN_BIAS_COUNT = 5        # Mindestanzahl für eine "starke" Richtung pro TF
 BULLISH_RATIO = 0.65      # Mehrheitsschwelle pro TF
-DATA_FILE = Path(__file__).parent / "data" / "market_sentiment.json"
+from config import CFG as _CFG  # noqa: E402
+DATA_FILE = Path(getattr(_CFG, "data_dir", Path(__file__).parent / "data")) / "market_sentiment.json"
 
 
 # ─── Pure Logik (testbar ohne API) ─────────────────────────────────
