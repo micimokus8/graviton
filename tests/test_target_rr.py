@@ -4,10 +4,15 @@ from config import EXIT, profit_lock_pct_for
 
 
 class TargetRRTests(unittest.TestCase):
-    def test_target_is_two_r_of_actual_stop(self):
-        # DASH 27.10.: Entry 55.14, SL 54.36 -> 1.41% Stop -> Ziel 2.83%
+    def test_target_is_rr_multiple_of_actual_stop(self):
+        # DASH 27.10.: Entry 55.14, SL 54.36 -> 1.41% Stop. Ziel = 3R = 4.24%
+        # (target_rr ist konfigurierbar; die Messung 28.10. sprach fuer 3R.)
+        sl_pct = (55.14 - 54.36071429) / 55.14 * 100
         target = profit_lock_pct_for(55.14, 54.36071429)
-        self.assertAlmostEqual(target, 2.83, places=1)
+        expected = max(sl_pct * EXIT["target_rr"], EXIT["profit_lock_pct"])
+        expected = min(expected, EXIT["target_max_pct"])
+        self.assertAlmostEqual(target, expected, places=2)
+        self.assertAlmostEqual(target, 4.24, places=1)
 
     def test_target_has_minimum(self):
         # Sehr enger Stop (0.5%) darf das Ziel nicht unter die 2%-Untergrenze druecken.

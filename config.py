@@ -81,7 +81,12 @@ ENTRY = {
     "ema_smoothing":      9,
     "ema_distance_max":   0.50,    # Basis-Distanz; wird dynamisch via 24h-Change skaliert
     "overextension_max_long": 6.0,  # LONG-Block wenn Preis > +6% über EMA20(1h) — Parabel-Schutz
-    "sl_offset_pct":      0.90,    # Mindest-SL; effektiver SL = min(max(1.0× 1H-ATR, 0.9%), Cap)
+    # Mindest-SL; effektiver SL = min(max(1.0x 1H-ATR, Floor), Cap).
+    # Messung 28.10. (41 Trades, echte 5m-Kerzen bis Session-Close):
+    #   Floor 0.9% -> +2.0%  |  1.5% -> +19.9%  |  2.0% -> +16.1%
+    #   3.0% -> +8.9%        |  5.0% -> +1.9%   | 10.0% -> +3.5%  | kein SL -> +10.0%
+    # Der 1.4%-Stop war kein Rauschen, sondern zu eng fuer die 0.9er-Untergrenze.
+    "sl_offset_pct":      1.50,
     "sl_cap_pct":         5.0,     # Maximal-SL; 5% gibt Krypto-Intraday genug Luft (vorher 2.5% zu eng)
     "max_stair_steps":    1,       # Start: nur erster Pullback
     "max_parallel_coins": 1,
@@ -157,7 +162,10 @@ EXIT = {
     # das Ziel bei 2x SL; profit_lock_pct bleibt Untergrenze, target_max_pct
     # deckelt breite Stops (SL-Cap 5% -> sonst 10%+ Ziel, das nie laeuft).
     "profit_lock_pct":        2.0,    # Untergrenze fuer das 50%-Lock
-    "target_rr":              2.0,    # Mindest-R:R (Ziel = 2.0 x SL-Distanz)
+    # 3R statt 2R: bei 1.5% SL liegt das Teilziel bei 4.5%. Messung: TP bei
+    # 1.5R = +1.6%, 2R = +5.4%, 3R = +19.4% (ohne TP +19.9%) — fruehe TPs
+    # schneiden genau die Ausreisser ab, die den Bot tragen.
+    "target_rr":              3.0,
     "target_max_pct":        10.0,    # Cap fuer das Ziel in Prozent
     "pattern_exit_50":       False,   # Pattern aus — Live = DRY RUN (1m-Umkehr vs 5m-Pullback-Konflikt)
     "structural_exits":      False,   # EMA/RSI/S/R aus — Live = DRY RUN (nur SL + Profit-Lock + Trailing)
