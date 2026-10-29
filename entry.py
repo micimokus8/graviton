@@ -266,6 +266,20 @@ class EntryEngine:
 
     # ─── Hilfsfunktion: dynamische EMA-Max-Distanz ──────────────
 
+    def _entry_tf(self, symbol: str) -> str:
+        """Entry-Timeframe je Symbolklasse.
+
+        Tokenisierte Aktien-Perps (AAPLX, SPCXX, NVDAX, ...) laufen auf 15m
+        besser (Backtest: +12.4% vs +1.7%), Krypto auf 5m (-21% auf 15m).
+        """
+        try:
+            base_asset = str(symbol).split("/")[0].upper()
+            if base_asset in set(CFG.entry.get("stock_tokens") or []):
+                return str(CFG.entry.get("entry_tf_stock", "15m"))
+        except Exception:
+            pass
+        return str(CFG.entry.get("entry_tf", "5m"))
+
     def _dynamic_max_dist(self, symbol: str, bias: str) -> float:
         """
         EMA-Distanz basierend auf 24h-Change des Coins.
@@ -326,7 +340,7 @@ class EntryEngine:
         # Fetch 5m Daten — Guard: leere/dünne Daten = kein Entry (fail-closed).
         # Vorher: IndexError "index 0 is out of bounds" im 30s-Polling (POL 24.08.,
         # Kraken lieferte 0×5m-Kerzen) → Session ohne Entry beendet.
-        data = self._fetch_1m(symbol, limit=60, tf="5m")
+        data = self._fetch_1m(symbol, limit=60, tf=self._entry_tf(symbol))
         if data is None or len(data) < ema_period + 1:
             return EntrySignal(
                 symbol=symbol, bias=bias, state=EntryState.NO_ENTRY,

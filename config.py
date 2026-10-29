@@ -84,6 +84,21 @@ ENTRY = {
     # Messung 28.10. (41 Trades): Abstand <0.7 ATR5 -> WR 65%, +19.5% Summe;
     # >=0.7 ATR -> WR 39%, -13.0% Summe. Das war der eigentliche Verlustbringer,
     # nicht der Stop. 0 = Gate aus.
+    # Timeframe fuer EMA20 + ATR + Rejection, getrennt nach Instrument.
+    # Backtest (scripts/tf_backtest.py, 4000 Bars je Symbol):
+    #   15m Aktien-Perps: +12.4% / 177 Trades / WR 51% / 21 von 40 Tagen gruen
+    #   5m  Aktien-Perps:  +1.7% /  82 Trades / WR 39%
+    #   15m Krypto:       -21.0% / 155 Trades / WR 39%   <- 15m schadet hier
+    #   5m  Krypto:        +3.4% /  56 Trades / WR 46%
+    # Aktien sind traeger, 15m glaettet dort das Rauschen; Krypto laeuft auf
+    # 5m besser. Deshalb pro Symbolklasse.
+    "entry_tf":            "5m",     # Krypto / Default
+    "entry_tf_stock":      "15m",    # tokenisierte Aktien-Perps (AAPLX, SPCXX, ...)
+    # Explizite Liste statt "endet auf X": AVAX/CFX/CVX sind Coins, keine Aktien.
+    "stock_tokens": ["SPCXX", "AAPLX", "NVDAX", "TSLAX", "GOOGLX", "AMZNX",
+                     "METAX", "SPYX", "QQQX", "MSTRX", "COINX", "HOODX",
+                     "CRCLX", "GLDX", "OPENAIX", "ANTHROPICX", "OURAX",
+                     "MOONSHOTX"],
     "ema_distance_max_atr": 0.70,
     "ema_distance_max":   2.00,    # harter Prozent-Cap als Sicherheitsnetz
     "overextension_max_long": 6.0,  # LONG-Block wenn Preis > +6% über EMA20(1h) — Parabel-Schutz
