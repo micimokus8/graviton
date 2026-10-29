@@ -45,7 +45,16 @@ DRY_RUN = True  # DRY_RUN aktiviert 25.10 auf User-Wunsch (Live-Pause)
 #   crypto — wie bisher: 24/7-faehig, 5m-Entry, enger SL
 #   stocks — tokenisierte Aktien-Perps (AAPLX, SPCXX, NVDAX, ...):
 #            15m-Entry, weiterer SL, eigenes Datenverzeichnis, nur Mo-Fr
-MODE = _env("GRAVITON_MODE", "crypto").strip().lower()
+# Reihenfolge: Umgebungsvariable (Cron) -> MODE-Datei -> crypto.
+# Die Datei ist die Quelle der Wahrheit, damit auch direkte Python-Laeufe
+# (Debug, Tests, manuelle Skripte) denselben Modus sehen wie der Cron.
+_MODE_FILE = Path(__file__).parent / "MODE"
+MODE = _env("GRAVITON_MODE", "").strip().lower()
+if not MODE and _MODE_FILE.exists():
+    try:
+        MODE = _MODE_FILE.read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        MODE = ""
 if MODE not in {"crypto", "stocks"}:
     MODE = "crypto"
 
@@ -103,11 +112,11 @@ ENTRY = {
     # 5m besser. Deshalb pro Symbolklasse.
     "entry_tf":            "5m",     # Krypto / Default
     "entry_tf_stock":      "15m",    # tokenisierte Aktien-Perps (AAPLX, SPCXX, ...)
-    # Explizite Liste statt "endet auf X": AVAX/CFX/CVX sind Coins, keine Aktien.
-    "stock_tokens": ["SPCXX", "AAPLX", "NVDAX", "TSLAX", "GOOGLX", "AMZNX",
-                     "METAX", "SPYX", "QQQX", "MSTRX", "COINX", "HOODX",
-                     "CRCLX", "GLDX", "OPENAIX", "ANTHROPICX", "OURAX",
-                     "MOONSHOTX"],
+    # Aktien-Universum: Kraken fuehrt zwei Kategorien —
+    #   xStocks  (14): AAPLX, SPCXX, NVDAX, ...   (X-Suffix)
+    #   Equities (13): AMD, INTC, PLTR, MU, SOXL, SAMSUNG, ...
+    # Pre-IPO/Commodities/Forex/Indices bleiben aussen vor (andere Anlageklasse).
+    "stock_categories": ["xStocks", "Equities"],
     "ema_distance_max_atr": 0.70,
     "ema_distance_max":   2.00,    # harter Prozent-Cap als Sicherheitsnetz
     "overextension_max_long": 6.0,  # LONG-Block wenn Preis > +6% über EMA20(1h) — Parabel-Schutz
@@ -291,11 +300,14 @@ MODE_PROFILES = {
         "sessions": {"ny": _ny_window("09:30", "16:00", 10)},
         "active_sessions": ["ny"],
         # Aktien bewegen 1-3%/Tag — der Krypto-Filter (3%) wuerde alles aussortieren.
-        "scan": {"min_change_pct": 0.8, "min_volume_eur": 100_000, "max_watchlist": 8},
+        # 27 Aktien-Perps insgesamt — nicht vorne weg aussortieren.
+        "scan": {"min_change_pct": 0.8, "min_volume_eur": 20_000, "max_watchlist": 8},
         # 15m (Backtest: +12.4% vs +1.7% auf 5m), SL 2.5% statt 1.5%: ATR15m
         # auf Aktien ist ~0.3%, ein 1.5-ATR-Stop waere 0.45% und würde im
         # normalen Tagesrauschen liegen.
-        "entry": {"entry_tf": "15m", "sl_offset_pct": 2.50, "sl_cap_pct": 6.0},
+        # entry_tf bleibt 5m als Fallback; Aktien laufen ueber entry_tf_stock
+        # (die Markt-Kategorie entscheidet, nicht der Modus).
+        "entry": {"sl_offset_pct": 2.50, "sl_cap_pct": 6.0},
         # TP 2R statt 3R: bei 2.5% SL sind 3R = 7.5% Tagesziel, das praktisch
         # nie erreicht wird (Backtest: 4 TP-Treffer in 177 Trades).
         "exit": {"target_rr": 2.0, "target_max_pct": 12.0, "profit_lock_pct": 2.5},

@@ -272,9 +272,15 @@ class EntryEngine:
         Tokenisierte Aktien-Perps (AAPLX, SPCXX, NVDAX, ...) laufen auf 15m
         besser (Backtest: +12.4% vs +1.7%), Krypto auf 5m (-21% auf 15m).
         """
+        # Massgeblich ist die Markt-Kategorie des Symbols, nicht der Modus und
+        # nicht der Name: "Equities"-Perps (AMD, INTC, PLTR) haben kein
+        # X-Suffix, BTC waere im Stocks-Modus trotzdem kein 15m-Kandidat.
         try:
-            base_asset = str(symbol).split("/")[0].upper()
-            if base_asset in set(CFG.entry.get("stock_tokens") or []):
+            exchange = self._get_exchange()
+            exchange.load_markets()          # ccxt caches nach dem ersten Call
+            market = exchange.market(symbol)
+            category = (market.get("info") or {}).get("category") or ""
+            if category in set(CFG.entry.get("stock_categories") or []):
                 return str(CFG.entry.get("entry_tf_stock", "15m"))
         except Exception:
             pass

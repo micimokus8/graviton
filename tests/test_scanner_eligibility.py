@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+from config import CFG
 from scanner import KrakenScanner
 
 
@@ -48,7 +50,11 @@ class ScannerEligibilityTests(unittest.TestCase):
         scanner = KrakenScanner()
         scanner._exchange = _FakeExchange(ohlcv_change_pct)
         scanner._update_eur_usd = lambda: None
-        return scanner.scan()
+        # Der Test beschreibt einen Coin — unabhaengig davon, welcher Modus in
+        # der MODE-Datei steht (stocks wuerde ihn als Nicht-xStock filtern).
+        with patch.object(CFG, "universe", "crypto"), \
+             patch.dict(CFG.scan, {"min_change_pct": 3.0, "min_volume_eur": 500_000}):
+            return scanner.scan()
 
     def test_rejects_coin_when_final_ohlcv_change_is_below_threshold(self):
         self.assertEqual(self._scan(0.4), [])

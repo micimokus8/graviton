@@ -153,7 +153,8 @@ class KrakenScanner:
             # Universum je Modus: crypto handelt Coins, stocks nur xStocks.
             # (xStocks = tokenisierte Aktien-Perps wie AAPLX, SPCXX, NVDAX.)
             cat = market.get("info", {}).get("category", "")
-            is_stock = cat == "xStocks"
+            stock_cats = set(CFG.entry.get("stock_categories") or ["xStocks"])
+            is_stock = cat in stock_cats
             if getattr(CFG, "universe", "crypto") == "xstocks":
                 if not is_stock:
                     continue

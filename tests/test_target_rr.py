@@ -8,9 +8,11 @@ class TargetRRTests(unittest.TestCase):
         # DASH 27.10.: Entry 55.14, SL 54.36 -> 1.41% Stop. Ziel = 3R = 4.24%
         # (target_rr ist konfigurierbar; die Messung 28.10. sprach fuer 3R.)
         sl_pct = (55.14 - 54.36071429) / 55.14 * 100
-        target = profit_lock_pct_for(55.14, 54.36071429)
-        expected = max(sl_pct * EXIT["target_rr"], EXIT["profit_lock_pct"])
-        expected = min(expected, EXIT["target_max_pct"])
+        # Feste Krypto-Parameter, damit der Test nicht vom aktiven Modus
+        # (stocks: 2R) abhaengt.
+        cfg = {"target_rr": 3.0, "profit_lock_pct": 2.0, "target_max_pct": 10.0}
+        target = profit_lock_pct_for(55.14, 54.36071429, cfg=cfg)
+        expected = max(sl_pct * 3.0, 2.0)
         self.assertAlmostEqual(target, expected, places=2)
         self.assertAlmostEqual(target, 4.24, places=1)
 
