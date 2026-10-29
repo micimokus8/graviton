@@ -79,7 +79,13 @@ ENTRY = {
     "timeframe":          "1m",
     "ema_period":         20,
     "ema_smoothing":      9,
-    "ema_distance_max":   0.50,    # Basis-Distanz; wird dynamisch via 24h-Change skaliert
+    # Abstand zur EMA20 wird in ATR-Einheiten gemessen, nicht in Prozent:
+    # Prozent ist auf ruhigen Coins viel zu weit und auf volatilen zu eng.
+    # Messung 28.10. (41 Trades): Abstand <0.7 ATR5 -> WR 65%, +19.5% Summe;
+    # >=0.7 ATR -> WR 39%, -13.0% Summe. Das war der eigentliche Verlustbringer,
+    # nicht der Stop. 0 = Gate aus.
+    "ema_distance_max_atr": 0.70,
+    "ema_distance_max":   2.00,    # harter Prozent-Cap als Sicherheitsnetz
     "overextension_max_long": 6.0,  # LONG-Block wenn Preis > +6% über EMA20(1h) — Parabel-Schutz
     # Mindest-SL; effektiver SL = min(max(1.0x 1H-ATR, Floor), Cap).
     # Messung 28.10. (41 Trades, echte 5m-Kerzen bis Session-Close):

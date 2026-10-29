@@ -2,6 +2,7 @@ import unittest
 
 import numpy as np
 
+from config import CFG
 from entry import EntryEngine, EntryState
 
 
@@ -70,7 +71,15 @@ class EntryPullbackTests(unittest.TestCase):
         engine._exchange = _PullbackExchange(candles)
         engine._calc_sl_pct = lambda symbol, price: 1.41
 
-        signal = engine.check_entry("DASH/USD:USD", "LONG")
+        # Dieser Test prueft die Entry-Bar-Geometrie. Das ATR-Gate greift bei
+        # dieser Kerzenreihe vorher (winzige Range = riesiger ATR-Abstand) und
+        # wird hier deshalb gezielt abgeschaltet.
+        saved = CFG.entry.get("ema_distance_max_atr")
+        CFG.entry["ema_distance_max_atr"] = 0
+        try:
+            signal = engine.check_entry("DASH/USD:USD", "LONG")
+        finally:
+            CFG.entry["ema_distance_max_atr"] = saved
 
         self.assertNotEqual(signal.state, EntryState.ENTERED)
         self.assertIn("AT_EMA", signal.state.name)
@@ -110,6 +119,25 @@ class EntryPullbackTests(unittest.TestCase):
         self.assertNotEqual(signal.state, EntryState.ENTERED)
         self.assertIn("Wick", signal.reasoning)
         self.assertGreater(signal.wick_depth_pct, 0.5)
+
+
+    def test_entry_far_from_ema_in_atr_units_is_blocked(self):
+        # 41 Trades: Abstand >= 0.7 ATR5 -> WR 39%, Summe -13.0%. Prozent-
+        # Distanz taugt nicht als Mass (ruhige Coins: 0.5% = 1.5 ATR).
+        candles = []
+        for i in range(30):
+            candles.append([i * 300_000, 100.00, 100.05, 99.95, 100.00, 100.0])
+        # letzter Bar weit ueber der EMA, aber Range bleibt winzig
+        candles[-1] = [29 * 300_000, 100.90, 101.00, 100.85, 100.95, 150.0]
+
+        engine = EntryEngine()
+        engine._exchange = _PullbackExchange(candles)
+        engine._calc_sl_pct = lambda symbol, price: 0.6
+
+        signal = engine.check_entry("ENA/USD:USD", "LONG")
+
+        self.assertEqual(signal.state, EntryState.NO_ENTRY)
+        self.assertIn("ATR", signal.reasoning)
 
 
 if __name__ == "__main__":

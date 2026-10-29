@@ -376,6 +376,40 @@ class EntryEngine:
         # Distanz zur EMA
         distance_pct = abs(current_price - current_ema) / current_ema * 100
 
+        # ── ATR-Gate: Abstand in ATR-Einheiten, nicht in Prozent ──
+        # Prozent-Distanz ist auf ruhigen Coins viel zu weit (0.5% = 1.5 ATR)
+        # und auf volatilen zu eng. 41 Trades: >=0.7 ATR5 verliert -13.0%,
+        # <0.7 ATR bringt +19.5%. Ein Einstieg in eine bereits gelaufene
+        # Bewegung ist der eigentliche Verlustbringer — nicht der Stop.
+        atr_gate = float(cfg.get("ema_distance_max_atr", 0.0) or 0.0)
+        atr5_pct = 0.0
+        try:
+            if data is not None and len(data) >= 15:
+                trs = []
+                for i in range(len(data) - 14, len(data)):
+                    h_i, l_i, c_prev = float(data[i][2]), float(data[i][3]), float(data[i - 1][4])
+                    trs.append(max(h_i - l_i, abs(h_i - c_prev), abs(l_i - c_prev)))
+                atr5 = float(np.mean(trs))
+                if atr5 > 0 and current_price > 0:
+                    atr5_pct = atr5 / current_price * 100
+        except Exception:
+            atr5_pct = 0.0
+
+        if atr_gate > 0 and atr5_pct > 0:
+            dist_atr = distance_pct / atr5_pct
+            if dist_atr > atr_gate:
+                return EntrySignal(
+                    symbol=symbol, bias=bias, state=EntryState.NO_ENTRY,
+                    price=round(current_price, 6), ema20=round(current_ema, 6),
+                    distance_pct=round(distance_pct, 4),
+                    rejection=False, rejection_high=0, rejection_low=0,
+                    rejection_close=0, entry_price=0, stop_loss=0,
+                    step=current_step,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    reasoning=(f"zu weit von EMA20: {dist_atr:.2f} ATR "
+                               f"(> {atr_gate:.2f}) — Einstieg in gelaufene Bewegung"),
+                )
+
         # ─── State Machine ──────────────────────────────────────
         # Ein Pullback darf die EMA20 kurzfristig unterschreiten (LONG)
         # bzw. überschreiten (SHORT). Die alte Seitenprüfung an dieser Stelle
