@@ -121,6 +121,22 @@ Entry requires:
 
    Percent was the wrong unit: 0.5 % is 1.5 ATR on a quiet coin and 0.3 ATR on
    a volatile one — which let 18 entries chase moves that had already run.
+
+   The band is **per mode**: crypto 0.70 (measured on the 41 trades above),
+   stocks **1.10** (sweep over 4 000 bars per xStock):
+
+   | band | trades | total | without the 3 biggest |
+   |---|---|---|---|
+   | 0.7 | 178 | +12.0 % | **−1.5 %** |
+   | 0.9 | 197 | +24.4 % | +10.9 % |
+   | 1.0 | 206 | +33.2 % | +19.7 % |
+   | **1.1** | 216 | **+39.6 %** | **+26.1 %** |
+   | 1.2 | 220 | +34.4 % | +20.9 % |
+   | 1.5 | 244 | +17.1 % | +3.6 % |
+   | 2.0 | 259 | +13.4 % | −0.1 % |
+
+   1.0–1.2 form a plateau (1.1 is the middle, not the peak). At 0.7 the whole
+   result comes from three trades — that is why the band was widened.
 2. One of the last three fully closed candles confirms rejection (on the same
    timeframe):
    - LONG: bullish candle with its low near EMA20, close in the upper part

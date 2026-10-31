@@ -307,11 +307,16 @@ MODE_PROFILES = {
         # normalen Tagesrauschen liegen.
         # entry_tf bleibt 5m als Fallback; Aktien laufen ueber entry_tf_stock
         # (die Markt-Kategorie entscheidet, nicht der Modus).
-        # ATR-Band 1.5 statt 0.7: 0.7 war auf 5m-Krypto kalibriert und blockte
+        # ATR-Band 1.1 statt 0.7: 0.7 war auf 5m-Krypto kalibriert und blockte
         # auf 15m fast alles (30.10.: 7 von 8 Coins bei 1.7-6.6 ATR).
-        # Messung xStocks 15m: 0.7 -> +12.0% (178 Trades), 1.5 -> +17.1% (244),
-        # 2.5 -> +13.6% (264). 1.5 hat die beste Kombination aus Edge und Trades.
-        "entry": {"sl_offset_pct": 2.50, "sl_cap_pct": 6.0, "ema_distance_max_atr": 1.50},
+        # Sweep xStocks 15m, 4000 Bars je Symbol (scripts/tf_backtest.py):
+        #   Band 0.7 +12.0% (178) | 0.9 +24.4% (197) | 1.0 +33.2% (206)
+        #        1.1 +39.6% (216) | 1.2 +34.4% (220) | 1.5 +17.1% (244)
+        #        2.0 +13.4% (259) | 2.5 +13.6% (264)
+        # Plateau 1.0-1.2, deshalb die Mitte (1.1) statt des Peaks.
+        # Robustheit: ohne die 3 groessten Trades bleibt bei 1.1 noch +26.1%
+        # (bei 0.7 waeren es -1.5% — dort tragen 3 Trades das ganze Ergebnis).
+        "entry": {"sl_offset_pct": 2.50, "sl_cap_pct": 6.0, "ema_distance_max_atr": 1.10},
         # TP 2R statt 3R: bei 2.5% SL sind 3R = 7.5% Tagesziel, das praktisch
         # nie erreicht wird (Backtest: 4 TP-Treffer in 177 Trades).
         "exit": {"target_rr": 2.0, "target_max_pct": 12.0, "profit_lock_pct": 2.5},
