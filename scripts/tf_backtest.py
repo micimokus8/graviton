@@ -36,8 +36,15 @@ TP_R = 3.0
 ATR_BAND = 0.7
 SESSION_CLOSE_H = 17
 
-STOCKS = ["SPCXX/USD:USD", "AAPLX/USD:USD", "NVDAX/USD:USD", "TSLAX/USD:USD",
-          "SPYX/USD:USD", "QQQX/USD:USD", "AMZNX/USD:USD", "METAX/USD:USD"]
+XSTOCKS = ["SPCXX/USD:USD", "AAPLX/USD:USD", "NVDAX/USD:USD", "TSLAX/USD:USD",
+           "SPYX/USD:USD", "QQQX/USD:USD", "AMZNX/USD:USD", "METAX/USD:USD",
+           "GOOGLX/USD:USD", "CRCLX/USD:USD", "COINX/USD:USD", "MSTRX/USD:USD",
+           "HOODX/USD:USD", "GLDX/USD:USD"]
+EQUITIES = ["AMD/USD:USD", "INTC/USD:USD", "PLTR/USD:USD", "MU/USD:USD",
+            "SOXL/USD:USD", "SOXS/USD:USD", "MRVL/USD:USD", "NBIS/USD:USD",
+            "SNDK/USD:USD", "SAMSUNG/USD:USD", "SKHY/USD:USD", "EWY/USD:USD",
+            "EWZ/USD:USD"]
+STOCKS = XSTOCKS + EQUITIES
 CRYPTO = ["BTC/USD:USD", "ETH/USD:USD", "SOL/USD:USD", "XRP/USD:USD"]
 
 
@@ -91,7 +98,8 @@ def session_close_ms(ts_ms: int, tf_ms: int) -> int:
     return int(close.timestamp() * 1000)
 
 
-def run_symbol(bars, tf_ms: int, band_atr: float = ATR_BAND):
+def run_symbol(bars, tf_ms: int, band_atr: float = ATR_BAND,
+               sl_pct: float = SL_PCT, tp_r: float = TP_R):
     if len(bars) < 80:
         return []
     arr = np.array([[b[0], b[1], b[2], b[3], b[4], b[5]] for b in bars], dtype=float)
@@ -123,8 +131,8 @@ def run_symbol(bars, tf_ms: int, band_atr: float = ATR_BAND):
 
         bias = "LONG" if long_setup else "SHORT"
         entry = c[i]
-        sl_price = entry * (1 - SL_PCT / 100) if bias == "LONG" else entry * (1 + SL_PCT / 100)
-        tp_price = entry * (1 + SL_PCT * TP_R / 100) if bias == "LONG" else entry * (1 - SL_PCT * TP_R / 100)
+        sl_price = entry * (1 - sl_pct / 100) if bias == "LONG" else entry * (1 + sl_pct / 100)
+        tp_price = entry * (1 + sl_pct * tp_r / 100) if bias == "LONG" else entry * (1 - sl_pct * tp_r / 100)
         close_ts = session_close_ms(int(ts[i]), tf_ms)
 
         pnl, reason = None, "open"
@@ -136,14 +144,14 @@ def run_symbol(bars, tf_ms: int, band_atr: float = ATR_BAND):
                 break
             if bias == "LONG":
                 if l[j] <= sl_price:
-                    pnl, reason = -SL_PCT, "sl"; break
+                    pnl, reason = -sl_pct, "sl"; break
                 if h[j] >= tp_price:
-                    pnl, reason = SL_PCT * TP_R, "tp"; break
+                    pnl, reason = sl_pct * tp_r, "tp"; break
             else:
                 if h[j] >= sl_price:
-                    pnl, reason = -SL_PCT, "sl"; break
+                    pnl, reason = -sl_pct, "sl"; break
                 if l[j] <= tp_price:
-                    pnl, reason = SL_PCT * TP_R, "tp"; break
+                    pnl, reason = sl_pct * tp_r, "tp"; break
         if pnl is None:
             continue
         last_day[day] = True
@@ -155,13 +163,17 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tf", default="15m")
     ap.add_argument("--symbols", default="")
-    ap.add_argument("--group", choices=["stocks", "crypto"], default="stocks")
+    ap.add_argument("--group", choices=["stocks", "xstocks", "equities", "crypto"],
+                    default="stocks")
     ap.add_argument("--atr-band", type=float, default=ATR_BAND,
                     help="Max. EMA-Abstand in ATR-Einheiten (Default 0.7)")
+    ap.add_argument("--sl", type=float, default=SL_PCT, help="Stop-Loss in Prozent")
+    ap.add_argument("--tp-r", type=float, default=TP_R, help="Take-Profit als R-Vielfaches")
     args = ap.parse_args()
 
+    groups = {"stocks": STOCKS, "xstocks": XSTOCKS, "equities": EQUITIES, "crypto": CRYPTO}
     syms = ([s.strip() for s in args.symbols.split(",") if s.strip()]
-            or (STOCKS if args.group == "stocks" else CRYPTO))
+            or groups[args.group])
     ex = ccxt.krakenfutures({"enableRateLimit": True, "options": {"defaultType": "swap"}})
     tf_ms = ex.parse_timeframe(args.tf) * 1000
 
@@ -175,7 +187,7 @@ def main() -> int:
         if not bars:
             print(f"{sym:16s} keine Daten")
             continue
-        tr = run_symbol(bars, tf_ms, args.atr_band)
+        tr = run_symbol(bars, tf_ms, args.atr_band, args.sl, args.tp_r)
         per_symbol[sym] = tr
         all_trades.extend(tr)
         p = [t["pnl"] for t in tr]

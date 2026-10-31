@@ -44,7 +44,7 @@ MODE → Scan (universe per mode) → Bias (4H veto / 1H direction / 15m confirm
 | Filter | crypto | stocks |
 |---|---|---|
 | 24h change | ≥ 3 % (no upper limit — futures ticker differs from spot) | **≥ 0.8 %** (equities move 1–3 %/day) |
-| 24h volume | > $500 000 | **> $20 000** (only 27 equities exist — do not pre-filter them away) |
+| 24h volume | > $500 000 | **> $5 000** (only 27 equities exist — do not pre-filter them away; `EWY`/`EWZ` stay out, a 100 USDC order would be >5 % of their daily volume) |
 | Watchlist | top 8 | top 8 |
 
 The universe comes from the Kraken market category, not from symbol names:
@@ -122,8 +122,26 @@ Entry requires:
    Percent was the wrong unit: 0.5 % is 1.5 ATR on a quiet coin and 0.3 ATR on
    a volatile one — which let 18 entries chase moves that had already run.
 
-   The band is **per mode**: crypto 0.70 (measured on the 41 trades above),
-   stocks **1.10** (sweep over 4 000 bars per xStock):
+   The band is **per market category** — measured on the **full** universe
+   (14 xStocks / 13 Equities), with the live exit parameters (SL 2.5 %, TP 2R):
+
+   | band | xStocks (14) | Equities (13) |
+   |---|---|---|
+   | 0.3 | −6.8 % (176) | — |
+   | 0.5 | +0.1 % (252) | **+31.5 %** (140) |
+   | 0.7 | **+10.2 %** (304) | +4.0 % (173) |
+   | 1.1 | −18.6 % (365) | −1.7 % (193) |
+
+   xStocks (index/mega-cap tokens) run further from the mean, Equities
+   (AMD, INTC, PLTR, SOXL) are more impulsive and lose when bought further
+   away. One band for both returned **−5.7 %** over 558 trades. Crypto keeps
+   0.70, xStocks 0.70, Equities 0.50.
+
+   *Caveat:* an earlier sweep on an 8-symbol xStocks list suggested 1.1 and
+   +39.6 %. With all 14 symbols that collapses to −18.6 % — the value was an
+   artifact of the smaller list. Always sweep the full universe.
+
+   Earlier xStocks sweep (8 symbols, SL 1.5 % / TP 3R):
 
    | band | trades | total | without the 3 biggest |
    |---|---|---|---|

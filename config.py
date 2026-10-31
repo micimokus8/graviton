@@ -112,11 +112,11 @@ ENTRY = {
     # 5m besser. Deshalb pro Symbolklasse.
     "entry_tf":            "5m",     # Krypto / Default
     "entry_tf_stock":      "15m",    # tokenisierte Aktien-Perps (AAPLX, SPCXX, ...)
-    # Aktien-Universum: nur xStocks (14: AAPLX, SPCXX, NVDAX, TSLAX, ...).
-    # Die Kategorie "Equities" (AMD, INTC, PLTR, MU, SOXL, SAMSUNG) sind zwar
-    # ebenfalls Perpetuals ohne Verfall, bleiben aber aussen vor (User-Entscheid
-    # 30.10.: nur X-Suffix handeln). Pre-IPO/Rohstoffe/Forex/Indizes ebenso.
-    "stock_categories": ["xStocks"],
+    # Aktien-Universum: BEIDE Kraken-Kategorien (User 30.10., Screenshots):
+    #   xStocks  (14): AAPLX, SPCXX, NVDAX, TSLAX, ... (X-Suffix)
+    #   Equities (13): AMD, INTC, PLTR, MU, SOXL, SAMSUNG, ... (24/7-Perps)
+    # Pre-IPO/Rohstoffe/Forex/Indizes bleiben aussen vor (andere Anlageklasse).
+    "stock_categories": ["xStocks", "Equities"],
     "ema_distance_max_atr": 0.70,
     "ema_distance_max":   2.00,    # harter Prozent-Cap als Sicherheitsnetz
     "overextension_max_long": 6.0,  # LONG-Block wenn Preis > +6% über EMA20(1h) — Parabel-Schutz
@@ -301,22 +301,26 @@ MODE_PROFILES = {
         "active_sessions": ["ny"],
         # Aktien bewegen 1-3%/Tag — der Krypto-Filter (3%) wuerde alles aussortieren.
         # 27 Aktien-Perps insgesamt — nicht vorne weg aussortieren.
-        "scan": {"min_change_pct": 0.8, "min_volume_eur": 20_000, "max_watchlist": 8},
+        # Volumen-Floor 5k statt 20k: sonst fallen AMD (17k) und PLTR (8.7k) raus.
+        # EWY (2.5k) und EWZ (1k) bleiben bewusst draussen — bei 100 USDC waere
+        # eine Order dort >5% des Tagesvolumens (Slippage).
+        "scan": {"min_change_pct": 0.8, "min_volume_eur": 5_000, "max_watchlist": 8},
         # 15m (Backtest: +12.4% vs +1.7% auf 5m), SL 2.5% statt 1.5%: ATR15m
         # auf Aktien ist ~0.3%, ein 1.5-ATR-Stop waere 0.45% und würde im
         # normalen Tagesrauschen liegen.
         # entry_tf bleibt 5m als Fallback; Aktien laufen ueber entry_tf_stock
         # (die Markt-Kategorie entscheidet, nicht der Modus).
-        # ATR-Band 1.1 statt 0.7: 0.7 war auf 5m-Krypto kalibriert und blockte
-        # auf 15m fast alles (30.10.: 7 von 8 Coins bei 1.7-6.6 ATR).
-        # Sweep xStocks 15m, 4000 Bars je Symbol (scripts/tf_backtest.py):
-        #   Band 0.7 +12.0% (178) | 0.9 +24.4% (197) | 1.0 +33.2% (206)
-        #        1.1 +39.6% (216) | 1.2 +34.4% (220) | 1.5 +17.1% (244)
-        #        2.0 +13.4% (259) | 2.5 +13.6% (264)
-        # Plateau 1.0-1.2, deshalb die Mitte (1.1) statt des Peaks.
-        # Robustheit: ohne die 3 groessten Trades bleibt bei 1.1 noch +26.1%
-        # (bei 0.7 waeren es -1.5% — dort tragen 3 Trades das ganze Ergebnis).
-        "entry": {"sl_offset_pct": 2.50, "sl_cap_pct": 6.0, "ema_distance_max_atr": 1.10},
+        # ATR-Band je Kategorie. Sweep 15m, 4000 Bars je Symbol, VOLLES
+        # Universum (14 xStocks / 13 Equities), SL 2.5% + TP 2R wie live:
+        #   xStocks : 0.3 -6.8% | 0.5 +0.1% | 0.7 +10.2% (304, 23/41 gruen)
+        #             0.9 (SL1.5/TP3) +11.9% | 1.1 -18.6%
+        #   Equities: 0.5 +31.5% (140, 22/39 gruen) | 0.7 +4.0% | 1.1 -1.7%
+        # Frueherer +39.6%-Wert fuer xStocks stammte aus einer 8-Symbol-Liste
+        # und war ein Artefakt — mit allen 14 ist 0.7 der beste Wert.
+        # Ein gemeinsames Band ist falsch: 1.1 fuer beide ergab -5.7%.
+        "entry": {"sl_offset_pct": 2.50, "sl_cap_pct": 6.0,
+                  "ema_distance_max_atr": 0.70,            # Krypto/Fallback
+                  "ema_distance_atr_by_category": {"xStocks": 0.70, "Equities": 0.50}},
         # TP 2R statt 3R: bei 2.5% SL sind 3R = 7.5% Tagesziel, das praktisch
         # nie erreicht wird (Backtest: 4 TP-Treffer in 177 Trades).
         "exit": {"target_rr": 2.0, "target_max_pct": 12.0, "profit_lock_pct": 2.5},

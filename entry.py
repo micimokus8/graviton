@@ -266,6 +266,16 @@ class EntryEngine:
 
     # ─── Hilfsfunktion: dynamische EMA-Max-Distanz ──────────────
 
+    def _category(self, symbol: str) -> str:
+        """Kraken-Marktkategorie ('xStocks', 'Equities', 'Layer 1', ...)."""
+        try:
+            exchange = self._get_exchange()
+            exchange.load_markets()          # ccxt caches nach dem ersten Call
+            market = exchange.market(symbol)
+            return (market.get("info") or {}).get("category") or ""
+        except Exception:
+            return ""
+
     def _entry_tf(self, symbol: str) -> str:
         """Entry-Timeframe je Symbolklasse.
 
@@ -275,15 +285,8 @@ class EntryEngine:
         # Massgeblich ist die Markt-Kategorie des Symbols, nicht der Modus und
         # nicht der Name: "Equities"-Perps (AMD, INTC, PLTR) haben kein
         # X-Suffix, BTC waere im Stocks-Modus trotzdem kein 15m-Kandidat.
-        try:
-            exchange = self._get_exchange()
-            exchange.load_markets()          # ccxt caches nach dem ersten Call
-            market = exchange.market(symbol)
-            category = (market.get("info") or {}).get("category") or ""
-            if category in set(CFG.entry.get("stock_categories") or []):
-                return str(CFG.entry.get("entry_tf_stock", "15m"))
-        except Exception:
-            pass
+        if self._category(symbol) in set(CFG.entry.get("stock_categories") or []):
+            return str(CFG.entry.get("entry_tf_stock", "15m"))
         return str(CFG.entry.get("entry_tf", "5m"))
 
     def _dynamic_max_dist(self, symbol: str, bias: str) -> float:
@@ -401,7 +404,10 @@ class EntryEngine:
         # und auf volatilen zu eng. 41 Trades: >=0.7 ATR5 verliert -13.0%,
         # <0.7 ATR bringt +19.5%. Ein Einstieg in eine bereits gelaufene
         # Bewegung ist der eigentliche Verlustbringer — nicht der Stop.
-        atr_gate = float(cfg.get("ema_distance_max_atr", 0.0) or 0.0)
+        # Band je Marktkategorie (xStocks 1.1, Equities 0.5), sonst Fallback.
+        by_cat = cfg.get("ema_distance_atr_by_category") or {}
+        atr_gate = float(by_cat.get(self._category(symbol),
+                                    cfg.get("ema_distance_max_atr", 0.0)) or 0.0)
         atr5_pct = 0.0
         try:
             if data is not None and len(data) >= 15:
