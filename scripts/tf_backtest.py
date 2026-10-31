@@ -91,7 +91,7 @@ def session_close_ms(ts_ms: int, tf_ms: int) -> int:
     return int(close.timestamp() * 1000)
 
 
-def run_symbol(bars, tf_ms: int):
+def run_symbol(bars, tf_ms: int, band_atr: float = ATR_BAND):
     if len(bars) < 80:
         return []
     arr = np.array([[b[0], b[1], b[2], b[3], b[4], b[5]] for b in bars], dtype=float)
@@ -104,7 +104,7 @@ def run_symbol(bars, tf_ms: int):
     for i in range(30, len(arr) - 1):
         if a14[i] <= 0 or vol_med[i] <= 0:
             continue
-        band = ATR_BAND * a14[i]
+        band = band_atr * a14[i]
         dist = c[i] - e20[i]
         body = abs(c[i] - o[i]) or 1e-9
         close_pos = (c[i] - l[i]) / (h[i] - l[i]) if h[i] > l[i] else 0.5
@@ -156,6 +156,8 @@ def main() -> int:
     ap.add_argument("--tf", default="15m")
     ap.add_argument("--symbols", default="")
     ap.add_argument("--group", choices=["stocks", "crypto"], default="stocks")
+    ap.add_argument("--atr-band", type=float, default=ATR_BAND,
+                    help="Max. EMA-Abstand in ATR-Einheiten (Default 0.7)")
     args = ap.parse_args()
 
     syms = ([s.strip() for s in args.symbols.split(",") if s.strip()]
@@ -173,7 +175,7 @@ def main() -> int:
         if not bars:
             print(f"{sym:16s} keine Daten")
             continue
-        tr = run_symbol(bars, tf_ms)
+        tr = run_symbol(bars, tf_ms, args.atr_band)
         per_symbol[sym] = tr
         all_trades.extend(tr)
         p = [t["pnl"] for t in tr]
@@ -196,7 +198,7 @@ def main() -> int:
           f"grüne Tage {sum(1 for x in days.values() if x>0)}/{len(days)}")
     print("Exits:", dict(reasons))
 
-    out = Path(__file__).resolve().parent.parent / "data" / f"tf_backtest_{args.tf}_{args.group}.json"
+    out = Path(__file__).resolve().parent.parent / "data" / f"tf_backtest_{args.tf}_{args.group}_band{args.atr_band}.json"
     out.write_text(json.dumps({"tf": args.tf, "group": args.group,
                                "per_symbol": per_symbol}, indent=1))
     print("→", out)

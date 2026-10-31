@@ -112,11 +112,11 @@ ENTRY = {
     # 5m besser. Deshalb pro Symbolklasse.
     "entry_tf":            "5m",     # Krypto / Default
     "entry_tf_stock":      "15m",    # tokenisierte Aktien-Perps (AAPLX, SPCXX, ...)
-    # Aktien-Universum: Kraken fuehrt zwei Kategorien —
-    #   xStocks  (14): AAPLX, SPCXX, NVDAX, ...   (X-Suffix)
-    #   Equities (13): AMD, INTC, PLTR, MU, SOXL, SAMSUNG, ...
-    # Pre-IPO/Commodities/Forex/Indices bleiben aussen vor (andere Anlageklasse).
-    "stock_categories": ["xStocks", "Equities"],
+    # Aktien-Universum: nur xStocks (14: AAPLX, SPCXX, NVDAX, TSLAX, ...).
+    # Die Kategorie "Equities" (AMD, INTC, PLTR, MU, SOXL, SAMSUNG) sind zwar
+    # ebenfalls Perpetuals ohne Verfall, bleiben aber aussen vor (User-Entscheid
+    # 30.10.: nur X-Suffix handeln). Pre-IPO/Rohstoffe/Forex/Indizes ebenso.
+    "stock_categories": ["xStocks"],
     "ema_distance_max_atr": 0.70,
     "ema_distance_max":   2.00,    # harter Prozent-Cap als Sicherheitsnetz
     "overextension_max_long": 6.0,  # LONG-Block wenn Preis > +6% über EMA20(1h) — Parabel-Schutz
@@ -307,7 +307,11 @@ MODE_PROFILES = {
         # normalen Tagesrauschen liegen.
         # entry_tf bleibt 5m als Fallback; Aktien laufen ueber entry_tf_stock
         # (die Markt-Kategorie entscheidet, nicht der Modus).
-        "entry": {"sl_offset_pct": 2.50, "sl_cap_pct": 6.0},
+        # ATR-Band 1.5 statt 0.7: 0.7 war auf 5m-Krypto kalibriert und blockte
+        # auf 15m fast alles (30.10.: 7 von 8 Coins bei 1.7-6.6 ATR).
+        # Messung xStocks 15m: 0.7 -> +12.0% (178 Trades), 1.5 -> +17.1% (244),
+        # 2.5 -> +13.6% (264). 1.5 hat die beste Kombination aus Edge und Trades.
+        "entry": {"sl_offset_pct": 2.50, "sl_cap_pct": 6.0, "ema_distance_max_atr": 1.50},
         # TP 2R statt 3R: bei 2.5% SL sind 3R = 7.5% Tagesziel, das praktisch
         # nie erreicht wird (Backtest: 4 TP-Treffer in 177 Trades).
         "exit": {"target_rr": 2.0, "target_max_pct": 12.0, "profit_lock_pct": 2.5},

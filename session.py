@@ -868,7 +868,10 @@ def _run_session(session_key: str):
                     summary_reasons.append(
                         f"{_base(cand)}: an EMA — {sig.reasoning or 'keine Rejection'}")
                 else:
-                    summary_reasons.append(f"{_base(cand)}: {sig.state}")
+                    # Grund mitgeben: "EntryState.NO_ENTRY" allein sagt nichts.
+                    # Das ATR-Gate schreibt z.B. "zu weit von EMA20: 3.51 ATR".
+                    detail = f" — {sig.reasoning}" if getattr(sig, "reasoning", "") else ""
+                    summary_reasons.append(f"{_base(cand)}: {sig.state.name}{detail}")
             except Exception as e:
                 summary_reasons.append(f"{_base(cand)}: Fehler — {e}")
         msg = f"⏱ [{name}] Kein Entry im Bias-Fenster — {len(active_candidates)} Coins geprüft, {cycle} Cycles\n"
