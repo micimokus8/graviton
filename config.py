@@ -59,7 +59,7 @@ if MODE not in {"crypto", "stocks"}:
     MODE = "crypto"
 
 SESSIONS = {
-    "ny":   {"scan": "13:00", "open": "13:30", "close": "17:00"},
+    "ny":   {"scan": "14:00", "open": "14:30", "close": "18:00"},
     "asia": {"scan": "23:30", "open": "00:00", "close": "02:00"},
 }
 
