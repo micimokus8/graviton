@@ -338,11 +338,17 @@ exchange-side TP).
 ```
 Job              UTC     CET*    Beschreibung
 ───────────────  ──────  ──────  ───────────────────────────────
-NY Scan (pre)    13:20   14:20   Writes watchlist for bias (Mon–Fri)
-NY Bias          13:25   14:25   4H/1H/15m bias + regime → breadth (Mon–Fri)
-NY Session       13:30   14:30   Polling; entries limited to 20 min after bias
+NYSE Open        14:30   15:30   (winter time; 13:30 UTC in summer)
+NY Scan          14:35   15:35   Writes watchlist for bias (Mon–Fri)
+NY Bias          14:50   15:50   4H/1H/15m bias + regime → breadth (Mon–Fri)
+NY Session       14:55   15:55   Polling; entries limited to 20 min after bias
 Asia Scan/Session                Paused
 ```
+
+The bias runs **after** the open on purpose: the session change and the
+session-volume ratio need at least one closed 15m candle (the first one closes
+15 minutes after the open). Running it before the open leaves `Session +X %`
+empty and disables the volume filter (`Vol 0.37x < 0.7x` never fires).
 
 *CET during winter time. The cron expressions run in **server-local time**.
 All three jobs run **Mon–Fri** and read the mode from `graviton/MODE`:
