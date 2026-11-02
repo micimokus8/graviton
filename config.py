@@ -275,10 +275,12 @@ def _ny_to_utc(hhmm: str) -> str:
     return _dt.combine(today, t, tzinfo=_NY).astimezone(_tz.utc).strftime("%H:%M")
 
 
-def _ny_window(open_et: str = "09:30", close_et: str = "16:00", scan_lead_min: int = 10) -> dict:
+def _ny_window(open_et: str = "09:30", close_et: str = "16:00", scan_after_open_min: int = 5) -> dict:
+    """Session-Fenster aus NY-Zeit. Der Scan laeuft NACH dem Open (+5 Min),
+    damit Session-Volumen und -Change im Bias echt gemessen werden koennen."""
     o, c = _ny_to_utc(open_et), _ny_to_utc(close_et)
     oh, om = (int(x) for x in o.split(":"))
-    total = (oh * 60 + om - scan_lead_min) % (24 * 60)
+    total = (oh * 60 + om + scan_after_open_min) % (24 * 60)
     return {"scan": f"{total // 60:02d}:{total % 60:02d}", "open": o, "close": c}
 
 
@@ -297,7 +299,7 @@ MODE_PROFILES = {
     "stocks": {
         # NYSE 9:30-16:00 ET. Die UTC-Zeiten werden beim Import berechnet,
         # damit die US-Zeitumstellung (1.11.) kein manuelles Nachziehen braucht.
-        "sessions": {"ny": _ny_window("09:30", "16:00", 10)},
+        "sessions": {"ny": _ny_window("09:30", "16:00", 5)},
         "active_sessions": ["ny"],
         # Aktien bewegen 1-3%/Tag — der Krypto-Filter (3%) wuerde alles aussortieren.
         # 27 Aktien-Perps insgesamt — nicht vorne weg aussortieren.
