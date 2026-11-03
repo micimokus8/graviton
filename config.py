@@ -249,6 +249,7 @@ class Config:
     # default_factory: die Modus-Profile werden erst NACH der Klasse berechnet
     data_dir: Path = field(default_factory=lambda: DATA_DIR)
     weekdays_only: bool = field(default_factory=lambda: WEEKDAYS_ONLY)
+    bias_gate: bool = field(default_factory=lambda: BIAS_GATE)
     universe: str = field(default_factory=lambda: UNIVERSE)
 
     def __getitem__(self, key):
@@ -293,6 +294,7 @@ MODE_PROFILES = {
         "entry": {"entry_tf": "5m", "sl_offset_pct": 1.50, "sl_cap_pct": 5.0},
         "exit": {"target_rr": 3.0, "target_max_pct": 10.0, "profit_lock_pct": 2.0},
         "data_dir": None,            # = data/
+        "bias_gate": True,           # Krypto: Bias bleibt Gate (unveraendert)
         "weekdays_only": False,
         "universe": "crypto",
     },
@@ -329,6 +331,11 @@ MODE_PROFILES = {
         "data_dir": "data/stocks",
         "weekdays_only": True,
         "universe": "xstocks",
+        # Der 1H-Bias trifft die Session-Richtung zu 47.8% (695 Symbol-Tage,
+        # scripts/bias_backtest.py) — ein Muenzwurf, der die Haelfte der
+        # Kandidaten blockt. Bei Aktien entscheidet deshalb die EMA20-Steigung
+        # am Entry (bias="AUTO"), der Bias bleibt nur Info im Log.
+        "bias_gate": False,
     },
 }
 
@@ -342,6 +349,7 @@ DATA_DIR = BASE_DIR / _profile["data_dir"] if _profile["data_dir"] else BASE_DIR
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 WEEKDAYS_ONLY = _profile["weekdays_only"]
 UNIVERSE = _profile["universe"]
+BIAS_GATE = _profile["bias_gate"]
 
 # LLM-Shadow-Bias ist komplett AUS (29.10., User-Entscheid).
 # Gruende: der Prompt ist krypto-spezifisch (BTC-Kontext, Krypto-Indikatoren),

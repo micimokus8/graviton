@@ -603,7 +603,21 @@ def _run_session(session_key: str):
         f"(max. {ENTRY_WINDOW_SECONDS // 60} Min nach Bias)"
     )
 
-    candidates = [r for r in bias_results if r["bias"] in ("LONG", "SHORT")]
+    # Bias-Gate: Krypto behaelt den 1H-Bias als Filter. Bei Aktien ist er ein
+    # Muenzwurf (47.8%, scripts/bias_backtest.py) — dort werden NOISE-Symbole
+    # mit bias="AUTO" mitgeprueft, die Richtung entscheidet der Entry selbst.
+    # Die Positionszahl bleibt bei 1 (max_parallel_coins), das Risiko steigt
+    # also nicht, nur die Auswahl wird breiter.
+    if getattr(CFG, "bias_gate", True):
+        candidates = [r for r in bias_results if r["bias"] in ("LONG", "SHORT")]
+    else:
+        candidates = []
+        for r in bias_results:
+            if r["bias"] in ("LONG", "SHORT"):
+                candidates.append(r)
+            elif r["bias"] == "NOISE":
+                candidates.append({**r, "bias": "AUTO",
+                                   "reason": f"AUTO (Bias NOISE) | {r.get('reason', '')[:80]}"})
 
     # Bias Telegram
     bias_lines = [f"🧠 [{name}] Bias:"]
@@ -692,6 +706,9 @@ def _run_session(session_key: str):
 
             try:
                 signal = entry_engine.check_entry(symbol, bias, current_step=1)
+                # bias="AUTO" wird im Entry aus der EMA20-Steigung aufgeloest —
+                # die echte Richtung steht im Signal, nicht im Kandidaten.
+                bias = getattr(signal, "bias", None) or bias
 
                 # Debug-Log pro Coin pro Cycle (nur File, kein Telegram)
                 state_name = signal.state.value if hasattr(signal.state, 'value') else str(signal.state)
@@ -728,7 +745,7 @@ def _run_session(session_key: str):
         cycle_signals = _sort_cycle_signals(cycle_signals)
         for cand, signal in cycle_signals:
             symbol = cand["symbol"]
-            bias = cand["bias"]
+            bias = getattr(signal, "bias", None) or cand["bias"]
             base = _base(cand)
 
             if signal.state == EntryState.ENTERED:

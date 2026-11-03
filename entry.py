@@ -361,6 +361,15 @@ class EntryEngine:
         closes  = data[:, 4]
         highs   = data[:, 2]
         lows    = data[:, 3]
+
+        # bias="AUTO": Richtung aus der EMA20-Steigung des Entry-Timeframes.
+        # Grund: der Tages-Bias trifft die Session-Richtung nur zu 47.8%
+        # (695 Symbol-Tage) — bei Aktien entscheidet deshalb der Trend, den
+        # der Entry ohnehin sieht. Muss VOR allen bias-Verzweigungen passieren.
+        if str(bias).upper() == "AUTO":
+            ema_line = self._calc_ema(closes, ema_period)
+            lookback = min(5, len(ema_line) - 1)
+            bias = "LONG" if ema_line[-1] > ema_line[-1 - lookback] else "SHORT"
         opens   = data[:, 1]
         volumes = data[:, 5]  # für Volumen-Confirmation
 

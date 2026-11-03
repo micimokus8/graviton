@@ -14,6 +14,8 @@ cd /root/.hermes/workspace/graviton || exit 1
 LOG="logs/session_${1:-ny}.log"
 mkdir -p logs
 echo "[$(date -u '+%H:%M UTC')] Session $1 gestartet (PID $$)" >> "$LOG"
-nohup .venv/bin/python3 session.py "${1:-ny}" >> "$LOG" 2>&1 &
+# -u: ungepuffert, damit der Log live mitlesbar ist (sonst steht alles im
+# Puffer und man sieht erst beim Prozess-Ende etwas).
+nohup .venv/bin/python3 -u session.py "${1:-ny}" >> "$LOG" 2>&1 &
 disown
 echo "PID $! — läuft im Hintergrund. Log: $LOG"
