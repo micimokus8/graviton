@@ -129,8 +129,19 @@ Entry requires:
    |---|---|---|
    | 0.3 | −6.8 % (176) | — |
    | 0.5 | +0.1 % (252) | **+31.5 %** (140) |
+   | 0.6 | −7.4 % (293) | — |
    | 0.7 | **+10.2 %** (304) | +4.0 % (173) |
+   | 0.8 | +8.5 % (341) | — |
+   | 0.9 | +1.5 % (358) | — |
+   | 1.0 | −0.7 % (372) | — |
    | 1.1 | −18.6 % (365) | −1.7 % (193) |
+   | 1.5 | **−74.3 %** (425) | — |
+   | 3.0 (kein Gate) | **−96.6 %** (461) | — |
+
+   The gate is the single most important filter: without it the same universe
+   loses −96.6 %. But the curve is **not smooth** (0.6 negative, 0.7 best,
+   0.8 close, 0.9 flat) — the exact value is a fitted knob, the *direction*
+   is what matters: do not chase entries beyond ~0.8 ATR.
 
    xStocks (index/mega-cap tokens) run further from the mean, Equities
    (AMD, INTC, PLTR, SOXL) are more impulsive and lose when bought further
