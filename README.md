@@ -4,6 +4,65 @@
   <img src="GravitonLogo.png" alt="Graviton" width="200">
 </p>
 
+> **Stand 13.11.2026 — Umbau auf Swing.** Der Daytrading-Loop (EMA20-Pullback,
+> NY-Session) ist **pausiert**. Graviton läuft jetzt als Swing-System: 1× täglich
+> scannen, max. 1 Position, über Tage halten. Die Abschnitte ab
+> „Alt: Daytrading" beschreiben das abgelöste System und bleiben als Referenz.
+
+## Graviton Swing (aktiv)
+
+**Idee:** Nicht mehr intraday skalpen, sondern einen Trend über mehrere Tage
+mitnehmen. Die Richtung kommt aus dem **Tageschart**; gekauft wird der
+**stärkste** Trend innerhalb der Aktien-Perps — maximal eine Position zur Zeit.
+
+**Universum (dynamisch, kein Hardcode):** alle Kraken-Perps der Kategorien
+`xStocks` (14) + `Equities` (13). Nimmt Kraken neue Titel dieser Kategorien auf,
+sind sie automatisch dabei.
+
+**Ablauf (1× täglich, 15:35 MEZ — nach US-Open):**
+1. Tagesrichtung je Titel: EMA20 > EMA50 > EMA100, Kurs > EMA50, ADX ≥ 20, +DI > −DI.
+2. Ranking der Aufwärtstrend-Titel nach ADX-Stärke.
+3. Filter: nicht zu nah am letzten Hoch (0,5 ATR Luft), Widerstand 1,5–4,0 ATR
+   entfernt, R:R ≥ 1,5, Stop ≤ 1,5 ATR (letztes Swing-Low bzw. ATR-Cap).
+4. Bester Kandidat → **1 Position**. Kein Kandidat → keine Aktion, aber der
+   Bericht nennt jeden Ablehnungsgrund.
+
+**Exits:**
+| Stufe | Regel | Aktion |
+|---|---|---|
+| TP1 | nächster Widerstand | 50 % verkaufen, Stop → Einstand |
+| Trendbruch | Tagesrichtung weg | Rest schließen |
+| Not-SL | Stop erreicht | schließen (Fill am Stop) |
+| Freitag | nur wenn Position im Minus | Verlierer raus, Gewinner laufen weiter |
+| Max-Hold | 20 Tage | schließen |
+
+**Junge Perps:** Reicht die Perp-Historie nicht für den EMA100-Warmup, wird die
+Tageshistorie des **Underlyings** (TwelveData, 20 Jahre) geholt und per
+Preis-Faktor auf das Perp-Niveau skaliert (`swing/twelvedata.py`,
+`engine._rescale`). So ist die Richtung auch für frisch gelistete Perps bestimmbar.
+
+**Jobs (Hermes Agent):**
+| Job | Zeit | Aufgabe |
+|---|---|---|
+| `graviton-swing-daily` | Mo–Fr 15:35 | Scan + Entry + Positions-Check |
+| `graviton-swing-exits` | Mo–Fr alle 30 Min (15–21) | nur offene Position; still, wenn nichts passiert |
+
+**Dateien:** `swing/` (Engine, Strategie, S/R, Buch, Daten, Indikatoren),
+`scripts/swing_session.py`, `scripts/swing_exits.py`,
+Papierbuch `data/swing_state.json` (getrennt vom alten `data/stocks/`).
+
+**Validierung** (20 Jahre Underlying-Historie, 24 Titel, 1 Position):
+Kontrolle +1,32 %, **ADX-Ranking +1,78 % pro Trade**, Ø 10 Tage Haltedauer.
+Vorbehalte: Survivorship in der Titelliste; die kombinierte Exit-Regel ist noch
+nicht backgetestet (siehe Checkliste).
+
+**Vor dem Livegang:** [`swing/LIVE_CHECKLIST.md`](swing/LIVE_CHECKLIST.md).
+
+---
+
+> **Alt: Daytrading (pausiert seit 13.11.2026)** — alles ab hier beschreibt das
+> abgelöste System und bleibt nur als Referenz stehen.
+
 Graviton trades **Kraken USD perpetuals** by hunting momentum around the US
 session open. It scans for instruments with strong intraday moves, determines
 the direction from the 1H structure (4H acts as a veto, 15m confirms), then
@@ -345,6 +404,11 @@ watcher-side only (if the watcher dies, the SL still protects, but there is no
 exchange-side TP).
 
 ## Cron Jobs (Hermes Agent)
+
+> **Pausiert seit 13.11.2026.** Aktiv sind nur noch `graviton-swing-daily`
+> (Mo–Fr 15:35) und `graviton-swing-exits` (Mo–Fr alle 30 Min, 15–21) —
+> siehe Abschnitt „Graviton Swing" oben. Die folgende Tabelle beschreibt die
+> abgelöste Daytrading-Kette.
 
 ```
 Job              UTC     CET*    Beschreibung
