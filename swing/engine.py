@@ -125,6 +125,30 @@ def entry_plan(view: dict, trig: dict) -> dict:
             "target": target, "rr": round(rr, 2)}
 
 
+def position_decision(pos: dict, view: dict, now: datetime) -> dict:
+    """Exit-Entscheidung für eine offene Position.
+
+    Wird sowohl vom Tages-Scan als auch vom Exit-Wächter (alle 30 min) genutzt,
+    damit Stop/TP nicht erst am nächsten Tag auffallen.
+    """
+    held = (now.date() - datetime.fromisoformat(pos["opened_at"]).date()).days
+    losing = view["price"] <= pos["entry"]
+    if _friday_close_window(now) and (
+            FRIDAY_MODE == "always" or (FRIDAY_MODE == "protect" and losing)):
+        reason = "Freitags-Close (Verlierer)" if losing else "Freitags-Close"
+        return {"action": "CLOSE", "reason": reason, "price": view["price"]}
+    if view["stance"] != "LONG":
+        return {"action": "CLOSE", "reason": "Trendbruch (1D)", "price": view["price"]}
+    if view["price"] <= pos["stop"]:
+        return {"action": "CLOSE", "reason": "Not-SL", "price": pos["stop"]}
+    if view["price"] >= pos["tp"] and not pos.get("partial_done"):
+        return {"action": "PARTIAL", "reason": "TP1 erreicht: 50% raus",
+                "price": pos["tp"], "remaining_pct": 50.0}
+    if held >= MAX_HOLD_DAYS:
+        return {"action": "CLOSE", "reason": "Max-Hold", "price": view["price"]}
+    return {"action": "HOLD", "reason": "", "price": view["price"]}
+
+
 def scan_from_data(data: dict, now: datetime, state: dict) -> dict:
     """data: {base: {'d1': [...], 'h4': [...]}}. Rein, ohne Netz."""
     now_ms = int(now.timestamp() * 1000)
@@ -140,21 +164,7 @@ def scan_from_data(data: dict, now: datetime, state: dict) -> dict:
         if v is None:
             out.update(action="NONE", reason="keine Daten für offene Position")
             return out
-        held = (now.date() - datetime.fromisoformat(pos["opened_at"]).date()).days
-        friday = _friday_close_window(now)
-        losing = v["price"] <= pos["entry"]
-        if friday and (FRIDAY_MODE == "always" or (FRIDAY_MODE == "protect" and losing)):
-            reason = "Freitags-Close (Verlierer)" if losing else "Freitags-Close"
-            out.update(action="CLOSE", reason=reason, price=v["price"])
-        elif v["stance"] != "LONG":
-            out.update(action="CLOSE", reason="Trendbruch (1D)", price=v["price"])
-        elif v["price"] <= pos["stop"]:
-            out.update(action="CLOSE", reason="Not-SL", price=pos["stop"])
-        elif v["price"] >= pos["tp"] and not pos.get("partial_done"):
-            out.update(action="PARTIAL", reason="TP1 erreicht: 50% raus", price=pos["tp"],
-                       remaining_pct=50.0)
-        elif held >= MAX_HOLD_DAYS:
-            out.update(action="CLOSE", reason="Max-Hold", price=v["price"])
+        out.update(position_decision(pos, v, now))
         return out
 
     if state.get("last_entry_date") == now.date().isoformat():

@@ -128,6 +128,32 @@ class TestScan(unittest.TestCase):
         self.assertIn("Freitags-Close", out["reason"])
 
 
+class TestPositionDecision(unittest.TestCase):
+    def setUp(self):
+        self.pos = {"base": "X", "side": "LONG", "entry": 100.0, "stop": 95.0,
+                    "tp": 120.0, "rr": 2.0, "units": 1.0, "partial_done": False,
+                    "opened_at": "2026-11-10T00:00:00+00:00"}
+        self.now = datetime(2026, 11, 12, 12, tzinfo=timezone.utc)  # Donnerstag
+
+    def test_stop_fills_at_stop_price(self):
+        d = engine.position_decision(self.pos, {"price": 94.0, "stance": "LONG"}, self.now)
+        self.assertEqual(d["action"], "CLOSE")
+        self.assertEqual(d["reason"], "Not-SL")
+        self.assertEqual(d["price"], 95.0)   # Fill am Stop, nicht am Kurseinbruch
+
+    def test_partial_only_once(self):
+        d = engine.position_decision(self.pos, {"price": 121.0, "stance": "LONG"}, self.now)
+        self.assertEqual(d["action"], "PARTIAL")
+        done = dict(self.pos, partial_done=True, stop=100.0)
+        d2 = engine.position_decision(done, {"price": 121.0, "stance": "LONG"}, self.now)
+        self.assertEqual(d2["action"], "HOLD")
+
+    def test_trend_break_closes(self):
+        d = engine.position_decision(self.pos, {"price": 101.0, "stance": None}, self.now)
+        self.assertEqual(d["action"], "CLOSE")
+        self.assertIn("Trendbruch", d["reason"])
+
+
 class TestSR(unittest.TestCase):
     def test_next_resistance_and_support(self):
         highs = [(3, 110.0), (8, 125.0)]
