@@ -20,26 +20,39 @@ mitnehmen. Die Richtung kommt aus dem **Tageschart**; gekauft wird der
 sind sie automatisch dabei.
 
 **Ablauf (1× täglich, 15:35 MEZ — nach US-Open):**
-1. Tagesrichtung je Titel: EMA20 > EMA50 > EMA100, Kurs > EMA50, ADX ≥ 20, +DI > −DI.
-2. Ranking der Aufwärtstrend-Titel nach ADX-Stärke.
-3. Filter: nicht zu nah am letzten Hoch (0,5 ATR Luft), Widerstand 1,5–4,0 ATR
-   entfernt, R:R ≥ 1,5, Stop ≤ 1,5 ATR (letztes Swing-Low bzw. ATR-Cap).
-4. Bester Kandidat → **1 Position**. Kein Kandidat → keine Aktion, aber der
-   Bericht nennt jeden Ablehnungsgrund.
+1. Tagesrichtung je Titel, auf **Handelstagen** (Mo–Fr). Long: EMA20 > EMA50 >
+   EMA100, Kurs > EMA50, ADX ≥ 20, +DI > −DI. Short ist der Spiegel (EMAs
+   abwärts, Kurs unter der EMA50, −DI > +DI).
+2. Nur Pullbacks: Long nicht am Hoch, Short nicht am Tief (mind. 0,5 ATR Abstand
+   zum letzten bestätigten Swing). Ziele kommen aus jungen, deutlichen Pivots
+   (letzte ~60 Handelstage), nicht aus alten Mini-Zacken.
+3. Stop hinter dem Swing, mit Puffer, mindestens 0,8 ATR und höchstens 1,5 ATR.
+   Ziel 1,5–4 ATR entfernt, sonst ein gemessenes 2,5-ATR-Ziel. R:R ≥ 1,5.
+4. Stärkster Kandidat (ADX) → **1 Position**, Long oder Short. Kein Kandidat →
+   keine Aktion, aber der Bericht nennt jeden Ablehnungsgrund.
+
+Long und Short schaltet man in `swing/config.py` (`ALLOW_LONG`, `ALLOW_SHORT`).
+Beide an = der stärkere Kandidat gewinnt. Es bleiben Papier-Vorschläge, keine
+Orders und keine neuen API-Keys.
 
 **Exits:**
 | Stufe | Regel | Aktion |
 |---|---|---|
-| TP1 | nächster Widerstand | 50 % verkaufen, Stop → Einstand |
+| TP1 | Ziel erreicht | 50 % raus, Stop → Einstand |
 | Trendbruch | Tagesrichtung weg | Rest schließen |
 | Not-SL | Stop erreicht | schließen (Fill am Stop) |
 | Freitag | nur wenn Position im Minus | Verlierer raus, Gewinner laufen weiter |
-| Max-Hold | 20 Tage | schließen |
+| Max-Hold | 20 Tageskerzen | schließen (Handelstage, nicht Kalendertage) |
 
-**Junge Perps:** Reicht die Perp-Historie nicht für den EMA100-Warmup, wird die
-Tageshistorie des **Underlyings** (TwelveData, 20 Jahre) geholt und per
-Preis-Faktor auf das Perp-Niveau skaliert (`swing/twelvedata.py`,
-`engine._rescale`). So ist die Richtung auch für frisch gelistete Perps bestimmbar.
+**Daten:** Die Tageskerzen sind für alle Titel Handelstage. Kraken-Perps
+liefern von Haus aus auch Samstag und Sonntag; die fallen raus, damit ein
+20er-Schnitt nicht mal Börsentage und mal Wochenenden mischt. Reicht die
+Perp-Historie nicht für den EMA100-Warmup, wird die Tageshistorie des
+**Underlyings** (TwelveData) geholt und per Preis-Faktor auf das Perp-Niveau
+skaliert (`swing/twelvedata.py`, `engine._rescale`). Liefert eine Quelle nichts
+(z. B. Samsung `005930.KS`, SK Hynix `000660.KS`) oder antwortet Kraken nicht,
+steht das im Bericht unter **DATENFEHLER** — nicht als „zu wenig Historie“ und
+nicht still verschwunden.
 
 **Jobs (Hermes Agent):**
 | Job | Zeit | Aufgabe |

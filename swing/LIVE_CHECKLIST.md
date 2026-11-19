@@ -48,9 +48,12 @@ suchen, **bevor** live geschaltet wird.
 
 ## 9. Parameter mit Setzungs-Charakter bewusst bestätigen
 Diese Werte sind gesetzt, nicht gemessen:
-- `NOT_AT_TOP_ATR = 0.5` (Abstand zum letzten Hoch)
-- `TARGET_MIN/MAX_ATR = 1.5 / 4.0`
-- `RISK_ATR_CAP = 1.5`, `MAX_HOLD_DAYS = 20`
+- `NOT_AT_TOP_ATR = 0.5` (Mindest-Pullback, sonst kein Kauf am Hoch / Short am Tief)
+- `MIN_STOP_ATR = 0.8`, `STOP_BUFFER_ATR = 0.25`, `RISK_ATR_CAP = 1.5`
+- `TARGET_MIN/MAX_ATR = 1.5 / 4.0`, gemessenes Ziel 2,5 ATR
+- Pivots: `k = 5`, letzte 60 Handelstage, mindestens 0,4 ATR groß
+- `MAX_HOLD_BARS = 20` (Tageskerzen, nicht Kalendertage)
+- `ALLOW_LONG` / `ALLOW_SHORT` in `swing/config.py`
 - `FRIDAY_MODE = "protect"`
 
 ## 10. Erst dann umschalten
