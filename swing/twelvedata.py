@@ -16,6 +16,10 @@ SLEEP_S = 8.0
 CACHE_TTL_H = 20.0
 
 
+class DataError(RuntimeError):
+    """TwelveData hat nichts Brauchbares geliefert. Der Tagesbericht zeigt das."""
+
+
 def fetch_daily(symbol: str, outputsize: int = 5000) -> list[list]:
     """1D-Kerzen [date, open, high, low, close, volume], aufsteigend."""
     key = open(KEY_FILE).read().strip()
@@ -58,9 +62,13 @@ def to_ms(rows: list[list]) -> list[list]:
     return out
 
 
-def daily_ms(symbol: str, cache_path: str = "data/underlying_daily.json",
-             outputsize: int = 400) -> list[list] | None:
-    """Tageskerzen in ms-Form; pro Symbol gecacht (TTL), damit der Scan nicht bremst."""
+def load_daily_ms(symbol: str, cache_path: str = "data/underlying_daily.json",
+                  outputsize: int = 400) -> list[list]:
+    """Tageskerzen in ms-Form. Wirft DataError statt still None zu liefern.
+
+    Pro Symbol gecacht (TTL), damit der Scan nicht bei jedem Start neu lädt.
+    Ein Fehler wird nicht gecacht — der nächste Lauf versucht es wieder.
+    """
     now = datetime.now(timezone.utc)
     cache: dict = {}
     if os.path.exists(cache_path):
@@ -73,14 +81,16 @@ def daily_ms(symbol: str, cache_path: str = "data/underlying_daily.json",
     if isinstance(entry, dict):
         try:
             age = (now - datetime.fromisoformat(entry["fetched_at"])).total_seconds()
-            if age < CACHE_TTL_H * 3600:
+            if age < CACHE_TTL_H * 3600 and entry.get("rows"):
                 return to_ms(entry["rows"])
         except (KeyError, TypeError, ValueError):
             pass
     try:
         rows = fetch_daily(symbol, outputsize=outputsize)
-    except Exception:
-        return None
+    except Exception as exc:
+        raise DataError(f"TwelveData {symbol}: {str(exc)[:140]}") from exc
+    if not rows:
+        raise DataError(f"TwelveData {symbol} lieferte nichts")
     books[symbol] = {"fetched_at": now.isoformat(), "rows": rows}
     cache["symbols"] = books
     os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
@@ -88,3 +98,12 @@ def daily_ms(symbol: str, cache_path: str = "data/underlying_daily.json",
         json.dump(cache, fh)
     time.sleep(SLEEP_S)  # Rate-Limit respektieren
     return to_ms(rows)
+
+
+def daily_ms(symbol: str, cache_path: str = "data/underlying_daily.json",
+             outputsize: int = 400) -> list[list] | None:
+    """Wie `load_daily_ms`, aber None bei Fehler (ältere Aufrufer)."""
+    try:
+        return load_daily_ms(symbol, cache_path=cache_path, outputsize=outputsize)
+    except DataError:
+        return None

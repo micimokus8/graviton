@@ -30,11 +30,20 @@ def main() -> int:
     loaded = engine.load_data(ex, perps, now)
     frames = loaded.get(pos["base"])
     if not frames:
+        print(f"GRAVITON EXIT — keine Daten für {pos['base']}. "
+              f"Position bleibt offen, bitte prüfen.")
+        return 0
+    if frames.get("error"):
+        print(f"GRAVITON EXIT — Datenfehler {pos['base']}: {frames['error']}")
         return 0
 
-    view = engine.daily_view(frames["d1"], int(now.timestamp() * 1000), frames.get("last"))
+    now_ms = int(now.timestamp() * 1000)
+    view = engine.daily_view(frames["d1"], now_ms, frames.get("last"))
     if view is None:
+        print(f"GRAVITON EXIT — zu wenig 1D-Historie für {pos['base']}. "
+              f"Position bleibt offen.")
         return 0
+    view["bars_held"] = engine.bars_held(frames["d1"], pos["opened_at"], now_ms)
 
     decision = engine.position_decision(pos, view, now)
     if decision["action"] == "HOLD":
@@ -45,8 +54,9 @@ def main() -> int:
 
     local = now.astimezone(ZoneInfo("Europe/Berlin"))
     price = decision.get("price") or view["price"]
+    side = (pos.get("side") or "LONG").upper()
     lines = [f"GRAVITON EXIT — {local:%d.%m.%Y %H:%M} MEZ", "",
-             f"POSITION: LONG {pos['base']} @ {pos['entry']:.2f} "
+             f"POSITION: {side} {pos['base']} @ {pos['entry']:.2f} "
              f"(Stop {pos['stop']:.2f} | Ziel {pos['tp']:.2f})",
              f"AKTION: {applied} — {decision.get('reason')} @ {price:.2f}"]
     if applied == "PARTIAL":
